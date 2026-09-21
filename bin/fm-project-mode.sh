@@ -16,6 +16,13 @@
 #   - <name> [<mode>] - <desc> (added <date>)          -> <mode> off
 #   - <name> [<mode> +yolo] - <desc> (added <date>)    -> <mode> on
 #
+# The annotation is a space-separated token list: the first token is the mode and
+# every other token is an additive flag. Flags this script does not interpret are
+# preserved rather than rejected, so a capability marker such as +socraticode
+# (AGENTS.md section 13) never changes a project's delivery posture. --annotation
+# prints that token list verbatim so capability readers share this one registry
+# parser instead of adding a second one.
+#
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
 #   direct-PR              push + PR via gh-axi, no pipeline
@@ -34,7 +41,7 @@
 #
 # An unknown/missing project or unknown mode falls back to "no-mistakes off" and warns
 # to stderr, so a typo never silently drops the gate.
-# Usage: fm-project-mode.sh [--raw] <project-name>
+# Usage: fm-project-mode.sh [--raw|--annotation] <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,42 +50,61 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/projects.md"
 RAW=0
-if [ "${1:-}" = "--raw" ]; then
-  RAW=1
-  shift
-fi
-NAME=${1:?usage: fm-project-mode.sh [--raw] <project-name>}
+ANNOTATION=0
+case "${1:-}" in
+  --raw) RAW=1; shift ;;
+  --annotation) ANNOTATION=1; shift ;;
+esac
+NAME=${1:?usage: fm-project-mode.sh [--raw|--annotation] <project-name>}
 
 if [ ! -f "$REG" ]; then
+  if [ "$ANNOTATION" -eq 1 ]; then
+    echo "warn: no registry at $REG; cannot read the annotation for $NAME" >&2
+    exit 1
+  fi
   echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
   echo "no-mistakes off"
   exit 0
 fi
 
-# awk emits "<mode> <yolo>" (one line) or nothing if the project is absent.
+# awk emits one tab-separated "<mode>\t<yolo>\t<annotation>" line, or nothing if
+# the project is absent. The annotation field is the verbatim bracket contents
+# and is empty for a legacy line that has none.
 parsed=$(awk -v n="$NAME" '
   $1=="-" && $2==n {
-    mode="no-mistakes"; yolo="off";
+    mode="no-mistakes"; yolo="off"; s="";
     if ($3 ~ /^\[/) {
-      s="";
       for (i=3; i<=NF; i++) { s = s (s==""?"":" ") $i; if ($i ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
       if (a[1] != "" && a[1] != "+yolo") mode = a[1];
       for (j=1; j<=k; j++) if (a[j]=="+yolo") yolo="on";
     }
-    print mode, yolo; exit
+    print mode "\t" yolo "\t" s; exit
   }
 ' "$REG")
 
 if [ -z "$parsed" ]; then
+  if [ "$ANNOTATION" -eq 1 ]; then
+    echo "warn: project \"$NAME\" not in registry" >&2
+    exit 1
+  fi
   echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
   echo "no-mistakes off"
   exit 0
 fi
 
-mode=${parsed%% *}
-yolo=${parsed##* }
+mode=${parsed%%	*}
+rest=${parsed#*	}
+yolo=${rest%%	*}
+annotation=${rest#*	}
+
+# An annotation query is a raw read of the registered token list, so it reports
+# what is written rather than the mapped delivery posture.
+if [ "$ANNOTATION" -eq 1 ]; then
+  printf '%s\n' "$annotation"
+  exit 0
+fi
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
   *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off ;;

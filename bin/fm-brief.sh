@@ -14,8 +14,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--socraticode <projectPath>]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--socraticode <projectPath>]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -32,6 +32,17 @@
 #   omitting both still fails loudly so an accidental omission is never silent.
 #   Set FM_SECONDMATE_CHARTER='<charter>' to fill the charter text.
 #   Set FM_SECONDMATE_SCOPE='<scope>' to write a routing scope distinct from the charter text.
+#   --socraticode <projectPath> adds the SocratiCode usage contract to a ship or
+#   scout brief, for a project the caller has already confirmed is indexed. Like
+#   --mode, the value is resolved by the caller rather than guessed here: this
+#   script never reads data/projects.md, and the path must be the absolute main
+#   checkout that codebase_list_projects lists, never a task worktree. The
+#   agent-only `socraticode` skill owns that confirmation and the wider decision
+#   procedure; this scaffold carries only what the worker needs, because a
+#   crewmate in a project worktree cannot load a firstmate skill. Omitted, the
+#   brief says nothing about SocratiCode, which is the correct scaffold for a
+#   project that is not enabled. Refused on secondmate charters, which route work
+#   rather than perform it.
 #   --herdr-lab is mandatory when the task will issue Herdr lifecycle commands.
 #   It adds the hard isolation contract backed by bin/fm-herdr-lab.sh.
 #   The flag must be explicit because {TASK} and {FIRSTMATE_SPEC} are filled
@@ -139,6 +150,8 @@ fi
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 KIND=ship
 HERDR_LAB=0
+SOCRATICODE_PATH=
+SOCRATICODE_SET=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
@@ -151,6 +164,7 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      socraticode) SOCRATICODE_PATH=$a; SOCRATICODE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -163,6 +177,8 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --socraticode) want_value=socraticode ;;
+    --socraticode=*) SOCRATICODE_PATH=${a#--socraticode=}; SOCRATICODE_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -195,6 +211,20 @@ ID=${POS[0]}
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
   exit 1
+fi
+
+# A relative or worktree-shaped path is the exact mistake the contract exists to
+# prevent, so an unusable value stops the scaffold instead of reaching a worker.
+if [ "$SOCRATICODE_SET" -eq 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --socraticode applies only to crewmate ship or scout briefs" >&2
+    exit 1
+  fi
+  case "$SOCRATICODE_PATH" in
+    /*) ;;
+    "") echo "error: --socraticode requires the absolute main-checkout path that codebase_list_projects lists" >&2; exit 1 ;;
+    *) echo "error: --socraticode path must be absolute (got '$SOCRATICODE_PATH'); pass the main checkout that codebase_list_projects lists, never a task worktree" >&2; exit 1 ;;
+  esac
 fi
 
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
@@ -390,6 +420,49 @@ EOF
 HERDR_SECTION=${HERDR_SECTION%$'\n'}
 fi
 
+# The worker-facing half of the SocratiCode contract. A crewmate works in a
+# project worktree and cannot load the agent-only `socraticode` skill, so the
+# operational rules travel in the brief; that skill stays the owner of the
+# supervisor-side decision procedure and points here for this text. The
+# projectPath rule is repeated as a hard rule because getting it wrong triggers
+# a full re-index of a disposable worktree, which is the opposite of why the
+# capability was turned on.
+SOCRATICODE_SECTION=
+if [ "$SOCRATICODE_SET" -eq 1 ]; then
+IFS= read -r -d '' SOCRATICODE_SECTION <<EOF || true
+# Codebase intelligence (SocratiCode)
+This project is indexed by SocratiCode, a local MCP server that answers structural questions about the codebase: semantic search, a dependency graph, symbol-level impact analysis, and call flow.
+Prefer it over a grep-and-read sweep for orientation questions; one query typically replaces many reads, which is why it is enabled here.
+
+**Always pass \`projectPath: $SOCRATICODE_PATH\` on every SocratiCode tool call.**
+That is the indexed main checkout. Never pass your own worktree path, and never omit the argument - omitting it resolves to your working directory.
+A worktree path or an omitted path looks like a brand-new project, reports \`No index found\`, and invites a full re-index of a checkout that is deleted at teardown.
+
+Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebase_prune\`, \`codebase_remove\`, or \`codebase_stop\`.
+Indexing is not yours to start; the project already has a file watcher keeping it current.
+If you see \`No index found\`, your path was wrong - fix the path, or fall back to ordinary tools and say so in your report.
+
+**It cannot see your changes.** The index covers the main checkout, not your worktree, and it is not branch-aware.
+It answers "how does this codebase work" and "what would I break", never "what did I just change".
+Read your own files for anything about your branch, your uncommitted edits, or your diff.
+
+Which tool for which question:
+- Orientation, "where does X happen": \`codebase_search\`
+- What a file imports and what imports it: \`codebase_graph_query\`
+- Blast radius before renaming, refactoring, or deleting: \`codebase_impact\`
+- One function or class with callers and callees: \`codebase_symbol\` (\`codebase_symbols\` to discover names first)
+- Execution flow from an entry point: \`codebase_flow\`
+- Schemas, API specs, infra configs: \`codebase_context_search\`
+
+Keep using ordinary tools for exact literal strings, files you already know, and anything about your own working tree.
+If the server is unreachable, carry on with ordinary tools and note it; it is an accelerator, never a gate.
+EOF
+SOCRATICODE_SECTION="${SOCRATICODE_SECTION%$'\n'}"
+SOCRATICODE_SECTION="$SOCRATICODE_SECTION
+
+"
+fi
+
 IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 # Task
 ## Captain's intent
@@ -413,7 +486,7 @@ $TASK_SECTION
 
 $HERDR_SECTION
 
-# Setup
+$SOCRATICODE_SECTION# Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
@@ -499,7 +572,7 @@ $TASK_SECTION
 
 $HERDR_SECTION
 
-# Setup
+$SOCRATICODE_SECTION# Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.

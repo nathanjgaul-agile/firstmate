@@ -1060,6 +1060,81 @@ test_home_brief_include_is_appended_last() {
   pass "fm-brief.sh: the home brief include lands last on ship and scout, verbatim, and fails closed"
 }
 
+# --socraticode carries the worker-facing half of the SocratiCode contract,
+# because a crewmate works in a project worktree and cannot load a firstmate
+# skill. The two rules pinned here are the ones whose absence costs real money:
+# every call must name the indexed main checkout, and the worker must never be
+# left thinking the index reflects its own branch.
+test_socraticode_section_carries_the_worker_contract() {
+  local home brief kind id
+  home="$TMP_ROOT/socraticode-home"
+  mkdir -p "$home/data"
+
+  for kind in ship scout; do
+    id="socraticode-$kind"
+    case "$kind" in
+      ship) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" jcat --mode no-mistakes \
+              --socraticode /main/checkout/jcat >/dev/null 2>&1 ;;
+      scout) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" jcat --scout \
+              --socraticode /main/checkout/jcat >/dev/null 2>&1 ;;
+    esac
+    brief="$home/data/$id/brief.md"
+    assert_grep "# Codebase intelligence (SocratiCode)" "$brief" \
+      "$kind --socraticode brief missing the section"
+    assert_grep "projectPath: /main/checkout/jcat" "$brief" \
+      "$kind brief must name the exact indexed path to pass"
+    assert_grep "never omit the argument" "$brief" \
+      "$kind brief must forbid omitting projectPath"
+    assert_grep "codebase_index" "$brief" \
+      "$kind brief must name the indexing tools it forbids"
+    assert_grep "It cannot see your changes" "$brief" \
+      "$kind brief must carry the main-checkout blind spot"
+    assert_grep "not branch-aware" "$brief" \
+      "$kind brief must say the index is not branch-aware"
+  done
+  pass "fm-brief.sh: --socraticode carries the path rule and the blind spot to ship and scout"
+}
+
+# Absence must be silent. A brief for an unenabled project that mentioned the
+# server at all would invite a call against an unindexed path, which is the
+# exact re-index this contract exists to prevent.
+test_socraticode_is_absent_unless_requested_and_refuses_bad_input() {
+  local home brief status=0 out
+  home="$TMP_ROOT/socraticode-absent-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" no-soc jcat --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/no-soc/brief.md"
+  assert_no_grep "SocratiCode" "$brief" \
+    "a brief without --socraticode must not mention the server"
+  assert_no_grep "Codebase intelligence" "$brief" \
+    "a brief without --socraticode must not carry the section heading"
+
+  # A relative path is the shape of a worktree-relative mistake, and a silently
+  # accepted one would reach the worker as an unusable projectPath.
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" soc-rel jcat --mode no-mistakes \
+    --socraticode relative/jcat 2>&1) || status=$?
+  expect_code 1 "$status" "a relative --socraticode path must be rejected"
+  assert_contains "$out" "must be absolute" \
+    "the refusal must name the absolute-path requirement (got: $out)"
+  assert_absent "$home/data/soc-rel/brief.md" \
+    "rejected --socraticode still wrote a brief"
+
+  status=0
+  FM_HOME="$home" FM_SECONDMATE_CHARTER=ops "$ROOT/bin/fm-brief.sh" soc-second \
+    --secondmate jcat --socraticode /main/checkout/jcat >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "secondmate --socraticode must be rejected"
+  assert_absent "$home/data/soc-second/brief.md" \
+    "rejected secondmate --socraticode still wrote a brief"
+
+  status=0
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" soc-noval jcat --mode no-mistakes \
+    --socraticode >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "--socraticode with no value must be rejected"
+  pass "fm-brief.sh: --socraticode is absent unless asked for and refuses unusable input"
+}
+
+
 test_worker_role_scope
 test_script_parses
 test_no_heredoc_in_command_substitution
@@ -1087,3 +1162,5 @@ test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
 test_home_brief_include_is_appended_last
+test_socraticode_section_carries_the_worker_contract
+test_socraticode_is_absent_unless_requested_and_refuses_bad_input
