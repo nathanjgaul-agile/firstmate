@@ -485,6 +485,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/socraticode.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/stow-memory.md",
       "audience": "maintainer-verification"
     },
