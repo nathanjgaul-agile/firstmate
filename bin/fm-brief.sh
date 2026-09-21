@@ -457,6 +457,10 @@ Which tool for which question:
 Keep using ordinary tools for exact literal strings, files you already know, and anything about your own working tree.
 If the server is unreachable, carry on with ordinary tools and note it; it is an accelerator, never a gate.
 EOF
+# Trim read's trailing newline, then carry the blank-line separator with the
+# section itself. The scaffolds interpolate this variable immediately before
+# "# Setup", so an omitted section must leave that spacing byte-identical to a
+# brief that never asked for one.
 SOCRATICODE_SECTION="${SOCRATICODE_SECTION%$'\n'}"
 SOCRATICODE_SECTION="$SOCRATICODE_SECTION
 
