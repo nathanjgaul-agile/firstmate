@@ -1083,8 +1083,12 @@ test_socraticode_section_carries_the_worker_contract() {
       "$kind --socraticode brief missing the section"
     assert_grep "projectPath: /main/checkout/jcat" "$brief" \
       "$kind brief must name the exact indexed path to pass"
+    assert_grep "on every SocratiCode tool call that takes one" "$brief" \
+      "$kind brief must bind the path rule to the calls that take a projectPath"
     assert_grep "never omit the argument" "$brief" \
       "$kind brief must forbid omitting projectPath"
+    assert_grep "take no parameters at all" "$brief" \
+      "$kind brief must name the tools the path rule does not cover"
     assert_grep "codebase_index" "$brief" \
       "$kind brief must name the indexing tools it forbids"
     assert_grep "codebase_graph_build" "$brief" \

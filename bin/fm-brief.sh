@@ -434,9 +434,10 @@ IFS= read -r -d '' SOCRATICODE_SECTION <<EOF || true
 This project is indexed by SocratiCode, a local MCP server that answers structural questions about the codebase: semantic search, a dependency graph, symbol-level impact analysis, and call flow.
 Prefer it over a grep-and-read sweep for orientation questions; one query typically replaces many reads, which is why it is enabled here.
 
-**Always pass \`projectPath: $SOCRATICODE_PATH\` on every SocratiCode tool call.**
+**Always pass \`projectPath: $SOCRATICODE_PATH\` on every SocratiCode tool call that takes one.**
 That is the indexed main checkout. Never pass your own worktree path, and never omit the argument - omitting it resolves to your working directory.
 A worktree path or an omitted path looks like a brand-new project, reports \`No index found\`, and invites a full re-index of a checkout that is deleted at teardown.
+Only \`codebase_list_projects\` and \`codebase_about\` take no parameters at all; every other tool takes that path.
 
 Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebase_prune\`, \`codebase_remove\`, \`codebase_stop\`, \`codebase_graph_build\`, \`codebase_graph_remove\`, \`codebase_context_index\`, or \`codebase_context_remove\`.
 Indexing is not yours to start; the project already has a file watcher keeping it current.

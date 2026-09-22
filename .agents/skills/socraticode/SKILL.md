@@ -33,7 +33,7 @@ Even where several worktrees deliberately share one index, that is still one ind
 
 ## Always pass an explicit projectPath
 
-Every SocratiCode tool takes a `projectPath`.
+Every SocratiCode tool that reads a codebase takes a `projectPath`; only `codebase_list_projects` and `codebase_about` take no parameters at all, because they describe the server rather than a project.
 Always pass the absolute path of the indexed main checkout, exactly as `codebase_list_projects` prints it.
 
 This rule is mandatory, and it is a spend control rather than a style preference.
@@ -44,7 +44,7 @@ Following that instruction would embed the whole repository again, per worktree,
 
 Two rules follow, and neither has an exception:
 
-- Never call a SocratiCode tool without `projectPath`, and never pass a worktree path.
+- Never call a project-scoped SocratiCode tool without `projectPath`, and never pass a worktree path.
 - Never run `codebase_index`, `codebase_update`, `codebase_watch`, `codebase_prune`, `codebase_remove`, `codebase_stop`, `codebase_graph_build`, `codebase_graph_remove`, `codebase_context_index`, or `codebase_context_remove`.
   Indexing is the captain's decision and the enabled projects already run a file watcher.
   A `No index found` reply means the path was wrong or the project is not enabled, never that you should index it.
