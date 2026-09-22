@@ -700,6 +700,14 @@ sync_project_registry() {
     line=$(registry_line_for_project "$project" || true)
     if [ -z "$line" ]; then
       line="- $project - cloned project (added $today)"
+    else
+      # +socraticode is a per-home assertion that THIS home's own clone has been
+      # indexed (AGENTS.md section 13), so it never inherits: copying it across
+      # homes would claim coverage for a clone nothing has ever indexed.
+      line=$(printf '%s\n' "$line" | sed -E \
+        -e 's/^(- [^ ]+ \[[^]]*)[[:space:]]\+socraticode/\1/' \
+        -e 's/^(- [^ ]+ \[)\+socraticode[[:space:]]/\1/' \
+        -e 's/^(- [^ ]+) \[\+socraticode\]/\1/')
     fi
     printf '%s\n' "$line" >> "$tmp"
   done

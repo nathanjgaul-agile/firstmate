@@ -135,6 +135,56 @@ EOF
   pass "seed allows overlapping project clone lists and drops the owns/owner routing"
 }
 
+# The +socraticode marker asserts that THIS home's own clone has been indexed,
+# so seeding must not carry it across homes: an inherited marker would tell a
+# secondmate agent that a clone nothing has ever indexed is ready to query. The
+# delivery posture written in the same annotation must survive the strip intact,
+# whichever position the marker held.
+test_seed_does_not_inherit_the_socraticode_marker() {
+  local home sub fakebin project out status
+  home="$TMP_ROOT/soc-marker-main"
+  sub="$TMP_ROOT/soc-marker-sub"
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  for project in alpha beta gamma; do
+    fm_git_init_commit "$home/projects/$project"
+    fm_git_add_origin "$home/projects/$project" "$TMP_ROOT/remotes/soc-marker-$project.git"
+  done
+  cat > "$home/data/projects.md" <<EOF
+- alpha [direct-PR +yolo +socraticode] - alpha project (added 2026-06-22)
+- beta [direct-PR +socraticode +yolo] - beta project (added 2026-06-22)
+- gamma [+socraticode] - gamma project (added 2026-06-22)
+EOF
+  fakebin=$(make_fake_no_mistakes "$TMP_ROOT/soc-marker-fake")
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_SECONDMATE_CHARTER='indexing marker seed' \
+    FM_SECONDMATE_SCOPE='indexing marker seed' \
+    "$ROOT/bin/fm-home-seed.sh" design "$sub" alpha beta gamma >/dev/null \
+    || fail "seed of marked projects failed"
+
+  for project in alpha beta gamma; do
+    status=0
+    out=$(FM_HOME="$sub" "$ROOT/bin/fm-socraticode.sh" "$project" 2>&1) || status=$?
+    expect_code 3 "$status" "the seeded home inherited the +socraticode marker for $project (got: $out)"
+    assert_contains "$out" "registry: not-marked" \
+      "the seeded home must report $project unmarked (got: $out)"
+    assert_not_contains "$out" "$sub/projects/$project" \
+      "the seeded home handed out an unindexed projectPath for $project (got: $out)"
+    status=0
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-socraticode.sh" "$project" 2>&1) || status=$?
+    expect_code 0 "$status" "seeding removed the main home's own marker for $project (got: $out)"
+  done
+
+  [ "$(FM_HOME="$sub" "$ROOT/bin/fm-project-mode.sh" alpha)" = "direct-PR on" ] \
+    || fail "stripping a trailing marker changed alpha's seeded delivery posture"
+  [ "$(FM_HOME="$sub" "$ROOT/bin/fm-project-mode.sh" beta)" = "direct-PR on" ] \
+    || fail "stripping a mid-annotation marker changed beta's seeded delivery posture"
+  [ "$(FM_HOME="$sub" "$ROOT/bin/fm-project-mode.sh" gamma 2>/dev/null)" = "no-mistakes off" ] \
+    || fail "stripping a flag-only marker changed gamma's seeded delivery posture"
+  FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" validate >/dev/null \
+    || fail "registry validation failed after seeding marked projects"
+  pass "seed: the per-home +socraticode marker never inherits, and posture survives"
+}
+
 test_home_seed_validate_rejects_unparseable_registry_entry() {
   local home err
   home="$TMP_ROOT/unparseable-registry-home"
@@ -2957,6 +3007,7 @@ EOF
 test_fm_home_parameterization
 test_lock_status_is_per_home
 test_seed_allows_overlapping_clones_and_drops_owner
+test_seed_does_not_inherit_the_socraticode_marker
 test_home_seed_validate_rejects_unparseable_registry_entry
 test_home_seed_refuses_broken_registry_symlink
 test_home_seed_refuses_unreadable_registry

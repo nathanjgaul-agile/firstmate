@@ -1091,6 +1091,8 @@ test_socraticode_section_carries_the_worker_contract() {
       "$kind brief must carry the main-checkout blind spot"
     assert_grep "not branch-aware" "$brief" \
       "$kind brief must say the index is not branch-aware"
+    assert_grep "map any cited path back to the same relative path inside your own worktree" "$brief" \
+      "$kind brief must scope a cited main-checkout path back into the worker's worktree"
   done
   pass "fm-brief.sh: --socraticode carries the path rule and the blind spot to ship and scout"
 }

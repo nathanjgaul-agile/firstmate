@@ -445,6 +445,7 @@ If you see \`No index found\`, your path was wrong - fix the path, or fall back 
 **It cannot see your changes.** The index covers the main checkout, not your worktree, and it is not branch-aware.
 It answers "how does this codebase work" and "what would I break", never "what did I just change".
 Read your own files for anything about your branch, your uncommitted edits, or your diff.
+Its results cite paths rooted in that main checkout, so map any cited path back to the same relative path inside your own worktree before you read or edit it.
 
 Which tool for which question:
 - Orientation, "where does X happen": \`codebase_search\`

@@ -82,6 +82,7 @@ Reach for SocratiCode first for these, on an enabled project:
 - Schemas, API specs, and infra configs registered as context artifacts: `codebase_context_search`.
 
 Keep using ordinary tools for an exact literal string, a file you already know, anything outside an enabled project, and anything about the working tree's own changes.
+A result's cited paths are rooted in the indexed main checkout, so map any cited path back to the same relative path in the tree you are actually working in before you read or edit it.
 
 ## Secondmate coverage
 
