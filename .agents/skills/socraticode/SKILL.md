@@ -42,13 +42,17 @@ Omitting `projectPath` resolves to the current working directory, which for any 
 Both a worktree path and an omitted path report `No index found` and instruct the caller to run `codebase_index`.
 Following that instruction would embed the whole repository again, per worktree, for a checkout that is discarded at teardown.
 
-Two rules follow, and neither has an exception:
+Three rules follow, and none has an exception:
 
 - Never call a project-scoped SocratiCode tool without `projectPath`, and never pass a worktree path.
 - Never run `codebase_index`, `codebase_update`, `codebase_watch`, `codebase_prune`, `codebase_remove`, `codebase_stop`, `codebase_graph_build`, `codebase_graph_remove`, `codebase_context_index`, or `codebase_context_remove`.
   Indexing is the captain's decision and the enabled projects already run a file watcher.
   That ban is about indexing the codebase: `codebase_context_search` self-indexes only the project's own declared context artifacts on first use, and stays available.
   A `No index found` reply means the path was wrong or the project is not enabled, never that you should index it.
+- Never call `codebase_graph_visualize` with `mode: "interactive"`; its default `mode: "mermaid"` returns the diagram as text and stays available.
+  This is a second and separate reason a tool is off limits, not part of the indexing ban: a worker runs unattended, so it must never take an action that surfaces on someone else's screen or writes a file outside its own worktree.
+  Interactive mode does both - it writes a self-contained HTML page and, with `open` defaulting to true, opens it in the captain's browser - and `open: false` still writes the file, so it is not an allowed variant.
+  Apply that principle, rather than this one tool name, when a later SocratiCode release adds another tool.
 
 ## Confirming a project is enabled
 

@@ -1099,6 +1099,10 @@ test_socraticode_section_carries_the_worker_contract() {
       "$kind brief must forbid rebuilding the shared dependency graph"
     assert_grep "codebase_context_remove" "$brief" \
       "$kind brief must forbid deleting context the watcher does not restore"
+    assert_grep 'mode: "interactive"' "$brief" \
+      "$kind brief must forbid the visualiser mode that opens a browser and writes a file"
+    assert_grep 'mode: "mermaid"' "$brief" \
+      "$kind brief must name the text-only visualiser mode that stays available"
     assert_grep "self-indexes only the project's own declared context artifacts" "$brief" \
       "$kind brief must reconcile the indexing ban with the recommended context search"
     assert_grep "It cannot see your changes" "$brief" \
@@ -1181,6 +1185,24 @@ test_socraticode_is_absent_unless_requested_and_refuses_bad_input() {
     --socraticode "$sub/projects/jcat" >/dev/null 2>&1
   assert_grep "projectPath: $sub/projects/jcat" "$sub/data/soc-sub-clone/brief.md" \
     "a secondmate home's own clone of the subject project must still be accepted"
+
+  # bin/fm-socraticode.sh composes the printed projectPath from
+  # FM_PROJECTS_OVERRIDE, so a home that sets it must accept that exact value and
+  # reject the unoverridden one the supervisor was never told to pass.
+  local over
+  over="$TMP_ROOT/socraticode-elsewhere"
+  FM_HOME="$home" FM_PROJECTS_OVERRIDE="$over" "$ROOT/bin/fm-brief.sh" soc-over jcat \
+    --mode no-mistakes --socraticode "$over/jcat" >/dev/null 2>&1
+  assert_grep "projectPath: $over/jcat" "$home/data/soc-over/brief.md" \
+    "the overridden projects directory must supply the accepted checkout"
+  status=0
+  out=$(FM_HOME="$home" FM_PROJECTS_OVERRIDE="$over" "$ROOT/bin/fm-brief.sh" soc-over-default \
+    jcat --mode no-mistakes --socraticode "$home/projects/jcat" 2>&1) || status=$?
+  expect_code 1 "$status" "the unoverridden projects path must be rejected when the override is set"
+  assert_contains "$out" "$over/jcat" \
+    "the refusal must name the overridden checkout it expected (got: $out)"
+  assert_absent "$home/data/soc-over-default/brief.md" \
+    "rejected unoverridden --socraticode still wrote a brief"
 
   status=0
   FM_HOME="$home" FM_SECONDMATE_CHARTER=ops "$ROOT/bin/fm-brief.sh" soc-second \

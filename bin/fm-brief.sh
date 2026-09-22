@@ -36,7 +36,9 @@
 #   scout brief, for a project the caller has already confirmed is indexed. Like
 #   --mode, the value is resolved by the caller rather than guessed here: this
 #   script never reads data/projects.md. It must be this home's own main checkout
-#   of the subject - $FM_HOME/projects/<repo-name>, or $FM_HOME itself when the
+#   of the subject - its projects directory's <repo-name> entry, spelled the way
+#   bin/fm-socraticode.sh prints it so FM_PROJECTS_OVERRIDE is honoured the same
+#   way, or $FM_HOME itself when the
 #   subject is the firstmate repo and this home is not a seeded secondmate home,
 #   whose own root is a firstmate worktree - which is what codebase_list_projects
 #   lists, and never a task worktree; anything else is refused. The
@@ -231,7 +233,7 @@ if [ "$SOCRATICODE_SET" -eq 1 ]; then
     echo "error: --socraticode applies only to crewmate ship or scout briefs" >&2
     exit 1
   fi
-  SOCRATICODE_PROJECT_PATH="$FM_HOME/projects/${POS[1]:-}"
+  SOCRATICODE_PROJECT_PATH="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/${POS[1]:-}"
   if fm_root_is_secondmate_home "$FM_HOME"; then
     SOCRATICODE_SELF_PATH=
     SOCRATICODE_EXPECTED="'$SOCRATICODE_PROJECT_PATH', never a task worktree; this home is a seeded secondmate home, so '$FM_HOME' is itself a firstmate worktree rather than an indexed main checkout"
@@ -463,6 +465,10 @@ Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebas
 Indexing is not yours to start; the project already has a file watcher keeping it current.
 That ban is about indexing the codebase: \`codebase_context_search\` self-indexes only the project's own declared context artifacts on first use, and stays available to you.
 If you see \`No index found\`, your path was wrong - fix the path, or fall back to ordinary tools and say so in your report.
+
+Never call \`codebase_graph_visualize\` with \`mode: "interactive"\`; its default \`mode: "mermaid"\` returns the diagram as text and stays available to you.
+This is a second and separate reason a tool is off limits, not part of the indexing ban: you run unattended, so never take an action that surfaces on someone else's screen or writes a file outside your own worktree.
+Interactive mode does both - it writes a self-contained HTML page and, with \`open\` defaulting to true, opens it in the captain's browser - and \`open: false\` still writes the file, so it is not an allowed variant.
 
 **It cannot see your changes.** The index covers the main checkout, not your worktree, and it is not branch-aware.
 It answers "how does this codebase work" and "what would I break", never "what did I just change".
