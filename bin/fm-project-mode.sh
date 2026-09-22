@@ -21,12 +21,14 @@
 # additive flag, in any position, and a leading token without that prefix is the
 # mode. An annotation of flags alone leaves the mode at its default. A token past
 # the first that lacks the "+" prefix can only be a misplaced mode, so it is an
-# error: the parser warns and falls back to "no-mistakes off" rather than
-# resolving a posture the line does not mean. Flags this
-# script does not interpret are preserved rather than rejected, so a capability
-# marker such as +socraticode (AGENTS.md section 13) never changes a project's
-# delivery posture. --annotation prints that token list verbatim so capability
-# readers share this one registry parser instead of adding a second one.
+# error on both output paths: the posture read warns and falls back to
+# "no-mistakes off", and --annotation warns and exits non-zero, so neither reader
+# of the line reports a posture or a capability the registry does not mean. Flags
+# this script does not interpret are preserved rather than rejected, so a
+# capability marker such as +socraticode (AGENTS.md section 13) never changes a
+# project's delivery posture. --annotation prints a well-formed token list
+# verbatim so capability readers share this one registry parser instead of adding
+# a second one.
 #
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
@@ -109,16 +111,26 @@ rest=${rest#*	}
 misplaced=${rest%%	*}
 annotation=${rest#*	}
 
+# A misplaced mode token makes the whole line unreadable, so it is caught before
+# either output path: the posture read falls back loudly, and the annotation read
+# refuses rather than handing a capability reader a line the registry does not
+# mean.
+if [ -n "$misplaced" ]; then
+  detail="misplaced token \"$misplaced\" in the annotation for $NAME; the mode must be the first token and every later token must be a \"+\" flag"
+  if [ "$ANNOTATION" -eq 1 ]; then
+    echo "warn: $detail; refusing to report this annotation until the registry line is corrected" >&2
+    exit 1
+  fi
+  echo "warn: $detail; defaulting to no-mistakes off" >&2
+  mode=no-mistakes
+  yolo=off
+fi
+
 # An annotation query is a raw read of the registered token list, so it reports
-# what is written rather than the mapped delivery posture.
+# what a well-formed line writes rather than the mapped delivery posture.
 if [ "$ANNOTATION" -eq 1 ]; then
   printf '%s\n' "$annotation"
   exit 0
-fi
-if [ -n "$misplaced" ]; then
-  echo "warn: misplaced token \"$misplaced\" in the annotation for $NAME; the mode must be the first token and every later token must be a \"+\" flag; defaulting to no-mistakes off" >&2
-  mode=no-mistakes
-  yolo=off
 fi
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;

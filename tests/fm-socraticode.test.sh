@@ -110,10 +110,25 @@ test_misplaced_mode_token_warns_and_falls_back() {
     "a malformed line must never resolve yolo on"
   assert_equals "no-mistakes off" "$(FM_HOME="$home" "$MODE" --raw mis-mode 2>/dev/null)" \
     "--raw must report the same fallback rather than the unreadable posture"
-  assert_equals "+socraticode local-only" \
-    "$(FM_HOME="$home" "$MODE" --annotation mis-mode 2>/dev/null)" \
-    "--annotation stays a verbatim read of whatever the line carries"
   pass "fm-socraticode: a misplaced mode token warns and falls back"
+}
+
+# Both readers of one registry line must agree that a malformed line is
+# unreadable. The annotation read is the one the enablement check depends on, so
+# a line the posture read refuses must never come back to it as cleanly enabled.
+test_misplaced_mode_token_refuses_the_capability_read() {
+  local home out rc=0
+  home=$(make_home misplaced-capability)
+  out=$(FM_HOME="$home" "$MODE" --annotation mis-mode 2>&1) || rc=$?
+  expect_code 1 "$rc" "--annotation must refuse a line carrying a misplaced mode token"
+  assert_contains "$out" "local-only" \
+    "the annotation refusal must name the misplaced token (got: $out)"
+  soc "$home" mis-mode
+  expect_code 1 "$SOC_RC" \
+    "the enablement check must fail on a malformed line rather than report a state (got: $SOC_OUT)"
+  assert_not_contains "$SOC_OUT" "registry: enabled" \
+    "a malformed line must never be reported as enabled (got: $SOC_OUT)"
+  pass "fm-socraticode: a misplaced mode token refuses the capability read too"
 }
 
 # --annotation exists so capability readers reuse the single registry parser.
@@ -202,6 +217,7 @@ test_unregistered_project_and_usage_errors_fail_closed() {
 test_marker_never_changes_delivery_posture
 test_flag_only_annotation_keeps_the_default_mode_and_its_flags
 test_misplaced_mode_token_warns_and_falls_back
+test_misplaced_mode_token_refuses_the_capability_read
 test_annotation_query_is_a_raw_registry_read
 test_enabled_project_reports_the_path_to_verify
 test_unmarked_project_is_distinguishable_and_pathless
