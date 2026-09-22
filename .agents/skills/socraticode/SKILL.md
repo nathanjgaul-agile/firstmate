@@ -67,6 +67,9 @@ When the states disagree, say so plainly and continue with ordinary tools.
 Report the disagreement as a concrete fact - which project, which path, declared enabled but not listed live, or listed live but not marked in the registry - and let the captain decide whether to index or to correct the marker.
 Never silently fall back, and never index to close the gap yourself.
 
+Once all three states agree, pass the capability on rather than keeping it to yourself: scaffold the worker's brief with `bin/fm-brief.sh ... --socraticode <projectPath>`, using the exact path you just confirmed.
+A crewmate cannot load this skill, so a brief scaffolded without that flag leaves the server attached but unused, which is the spend this capability exists to avoid.
+
 ## Which tool answers which question
 
 Reach for SocratiCode first for these, on an enabled project:
@@ -82,10 +85,15 @@ Keep using ordinary tools for an exact literal string, a file you already know, 
 
 ## Secondmate coverage
 
-A secondmate whose home is on this machine inherits the user-scope MCP registration and reaches the same local server, so it covers a project already indexed here under its own `projects/` path.
+The marker is per-home, and it is never inherited.
+Marking a project `+socraticode` in a home's registry asserts that that home's own clone, at that home's own absolute path, has itself been indexed.
+A secondmate home does not inherit the captain's coverage: its clone is an independent checkout at a different absolute path, and SocratiCode derives project identity from the path, so the captain's index says nothing about it.
 
-A remotely placed secondmate does not.
-Its host has no registration, its clones are different absolute paths, and the index lives on the captain's machine.
+A secondmate whose home is on this machine reaches the same local server through the user-scope MCP registration, so it may carry the marker - but only once its own `projects/<name>` path has itself been indexed and `codebase_list_projects` lists that path.
+Until then its registry must not carry the token, including when the project's registry line was copied in from the main home during seeding; strike the token there rather than leaving a claim that home's own clone does not back.
+
+A remotely placed secondmate cannot be covered at all.
+Its host has no registration, its clones are different absolute paths, and the index lives on the captain's machine, so no local indexing there is even reachable.
 Never mark a project enabled in a remote secondmate home's registry, and never instruct a remote home to query a server it cannot reach.
 When work routes to a remote home, treat SocratiCode as unavailable there and say so rather than assuming coverage.
 

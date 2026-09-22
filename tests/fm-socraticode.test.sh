@@ -32,9 +32,13 @@ make_home() {
 - legacy - legacy line with no annotation at all (added 2026-08-01)
 - yolo-too [direct-PR +yolo +socraticode] - both additive flags (added 2026-09-02)
 - ghost [no-mistakes +socraticode] - marked but never cloned here (added 2026-09-03)
+- bare-flag [+socraticode] - the marker with no mode token beside it (added 2026-09-04)
+- bare-both [+socraticode +yolo] - flags alone, yolo among them (added 2026-09-05)
+- bare-yolo [+yolo] - the long-supported flags-only spelling (added 2026-09-06)
 REG
   mkdir -p "$TMP_ROOT/$home/projects/marked" "$TMP_ROOT/$home/projects/plain" \
-    "$TMP_ROOT/$home/projects/legacy" "$TMP_ROOT/$home/projects/yolo-too"
+    "$TMP_ROOT/$home/projects/legacy" "$TMP_ROOT/$home/projects/yolo-too" \
+    "$TMP_ROOT/$home/projects/bare-flag" "$TMP_ROOT/$home/projects/bare-both"
   printf '%s\n' "$TMP_ROOT/$home"
 }
 
@@ -63,6 +67,29 @@ test_marker_never_changes_delivery_posture() {
   assert_equals "direct-PR off" "$(FM_HOME="$home" "$MODE" plain)" \
     "an unmarked project keeps its registered posture"
   pass "fm-socraticode: the +socraticode marker is additive and posture-neutral"
+}
+
+# An annotation may carry additive flags alone: `[+yolo]` has always been a
+# legal spelling, so `[+socraticode]` is one too. A leading flag is not a mode,
+# and reading it as one both warns spuriously and drops yolo through the
+# unknown-mode fallback, silently downgrading the project's merge authority.
+test_flag_only_annotation_keeps_the_default_mode_and_its_flags() {
+  local home err
+  home=$(make_home bareflag)
+  assert_equals "no-mistakes off" "$(FM_HOME="$home" "$MODE" bare-flag 2>/dev/null)" \
+    "a flag-only annotation must resolve to the default mode"
+  err=$(FM_HOME="$home" "$MODE" bare-flag 2>&1 >/dev/null)
+  assert_equals "" "$err" "a leading additive flag must not warn as an unknown mode"
+  assert_equals "no-mistakes on" "$(FM_HOME="$home" "$MODE" bare-both 2>/dev/null)" \
+    "+yolo must survive beside a leading additive flag"
+  assert_equals "no-mistakes on" "$(FM_HOME="$home" "$MODE" bare-yolo 2>/dev/null)" \
+    "the flags-only +yolo spelling must keep resolving yolo on"
+  assert_equals "+socraticode +yolo" "$(FM_HOME="$home" "$MODE" --annotation bare-both 2>/dev/null)" \
+    "--annotation must print the flag-only token list verbatim"
+  soc "$home" bare-flag
+  expect_code 0 "$SOC_RC" \
+    "a flag-only annotation must still read as enabled (got: $SOC_OUT)"
+  pass "fm-socraticode: a flag-only annotation keeps the default mode and its flags"
 }
 
 # --annotation exists so capability readers reuse the single registry parser.
@@ -149,6 +176,7 @@ test_unregistered_project_and_usage_errors_fail_closed() {
 }
 
 test_marker_never_changes_delivery_posture
+test_flag_only_annotation_keeps_the_default_mode_and_its_flags
 test_annotation_query_is_a_raw_registry_read
 test_enabled_project_reports_the_path_to_verify
 test_unmarked_project_is_distinguishable_and_pathless

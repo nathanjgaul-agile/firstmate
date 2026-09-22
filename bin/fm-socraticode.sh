@@ -14,6 +14,13 @@
 #               additive +socraticode token (bin/fm-project-mode.sh owns that
 #               annotation format and is the single registry parser)
 #   clone     - $FM_HOME/projects/<name> exists in this home
+# The marker is a PER-HOME assertion, never an inherited one: it claims that
+# THIS home's own clone, at the absolute path printed below, has itself been
+# indexed. A secondmate home's clone is an independent checkout at a different
+# absolute path, and SocratiCode derives identity from the path, so the main
+# home's index says nothing about it. A marker that reached a home by having its
+# registry line copied in rather than by that home's own clone being indexed is
+# a registry error to report and correct, not coverage.
 # It deliberately cannot read the third and decisive fact, whether the index is
 # live, because that lives in the MCP server rather than on disk. The caller
 # confirms it with one codebase_list_projects call and compares the absolute
@@ -31,13 +38,15 @@
 #   project, registry, projectPath, clone, verify
 #
 # Exit codes:
-#   0  marked enabled and the clone is present; projectPath is usable
+#   0  this home is marked enabled and its own clone is present; projectPath is
+#      the path this home's marker asserts is indexed, still to be confirmed live
 #   1  usage error, or the project is not in the registry at all
 #   3  registered but NOT marked +socraticode; use ordinary tools
 #   4  marked +socraticode but this home has no such clone; report the
-#      disagreement rather than degrading silently. A remote secondmate home
-#      reaches neither this machine's clones nor its server, so a remote home
-#      is expected to land here rather than to be "fixed" by indexing.
+#      disagreement rather than degrading silently. Any home whose own clones do
+#      not back its marker lands here, including a remote secondmate home, which
+#      reaches neither this machine's clones nor its server and so is expected
+#      to land here rather than to be "fixed" by indexing.
 #
 # Usage: fm-socraticode.sh <project-name>
 set -eu

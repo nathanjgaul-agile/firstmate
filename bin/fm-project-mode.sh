@@ -15,13 +15,15 @@
 #   - <name> - <desc> (added <date>)                  -> no-mistakes off  (legacy default)
 #   - <name> [<mode>] - <desc> (added <date>)          -> <mode> off
 #   - <name> [<mode> +yolo] - <desc> (added <date>)    -> <mode> on
+#   - <name> [+yolo] - <desc> (added <date>)           -> no-mistakes on
 #
-# The annotation is a space-separated token list: the first token is the mode and
-# every other token is an additive flag. Flags this script does not interpret are
-# preserved rather than rejected, so a capability marker such as +socraticode
-# (AGENTS.md section 13) never changes a project's delivery posture. --annotation
-# prints that token list verbatim so capability readers share this one registry
-# parser instead of adding a second one.
+# The annotation is a space-separated token list: every "+"-prefixed token is an
+# additive flag, in any position, and a leading token without that prefix is the
+# mode. An annotation of flags alone leaves the mode at its default. Flags this
+# script does not interpret are preserved rather than rejected, so a capability
+# marker such as +socraticode (AGENTS.md section 13) never changes a project's
+# delivery posture. --annotation prints that token list verbatim so capability
+# readers share this one registry parser instead of adding a second one.
 #
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
@@ -77,7 +79,7 @@ parsed=$(awk -v n="$NAME" '
       for (i=3; i<=NF; i++) { s = s (s==""?"":" ") $i; if ($i ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
-      if (a[1] != "" && a[1] != "+yolo") mode = a[1];
+      if (a[1] != "" && a[1] !~ /^\+/) mode = a[1];
       for (j=1; j<=k; j++) if (a[j]=="+yolo") yolo="on";
     }
     print mode "\t" yolo "\t" s; exit
