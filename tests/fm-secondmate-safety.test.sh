@@ -145,23 +145,28 @@ test_seed_does_not_inherit_the_socraticode_marker() {
   home="$TMP_ROOT/soc-marker-main"
   sub="$TMP_ROOT/soc-marker-sub"
   mkdir -p "$home/projects" "$home/data" "$home/state"
-  for project in alpha beta gamma; do
+  for project in alpha beta gamma delta epsilon; do
     fm_git_init_commit "$home/projects/$project"
     fm_git_add_origin "$home/projects/$project" "$TMP_ROOT/remotes/soc-marker-$project.git"
   done
+  # data/projects.md is hand-maintained markdown with no format validator, so the
+  # strip must accept every line shape the registry selectors accept: repeated
+  # separators and a line indented under a parent bullet.
   cat > "$home/data/projects.md" <<EOF
 - alpha [direct-PR +yolo +socraticode] - alpha project (added 2026-06-22)
 - beta [direct-PR +socraticode +yolo] - beta project (added 2026-06-22)
 - gamma [+socraticode] - gamma project (added 2026-06-22)
+- delta  [direct-PR +socraticode] - delta project (added 2026-06-22)
+  - epsilon [direct-PR +socraticode] - epsilon project (added 2026-06-22)
 EOF
   fakebin=$(make_fake_no_mistakes "$TMP_ROOT/soc-marker-fake")
 
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_SECONDMATE_CHARTER='indexing marker seed' \
     FM_SECONDMATE_SCOPE='indexing marker seed' \
-    "$ROOT/bin/fm-home-seed.sh" design "$sub" alpha beta gamma >/dev/null \
+    "$ROOT/bin/fm-home-seed.sh" design "$sub" alpha beta gamma delta epsilon >/dev/null \
     || fail "seed of marked projects failed"
 
-  for project in alpha beta gamma; do
+  for project in alpha beta gamma delta epsilon; do
     status=0
     out=$(FM_HOME="$sub" "$ROOT/bin/fm-socraticode.sh" "$project" 2>&1) || status=$?
     expect_code 3 "$status" "the seeded home inherited the +socraticode marker for $project (got: $out)"
@@ -180,9 +185,63 @@ EOF
     || fail "stripping a mid-annotation marker changed beta's seeded delivery posture"
   [ "$(FM_HOME="$sub" "$ROOT/bin/fm-project-mode.sh" gamma 2>/dev/null)" = "no-mistakes off" ] \
     || fail "stripping a flag-only marker changed gamma's seeded delivery posture"
+  [ "$(FM_HOME="$sub" "$ROOT/bin/fm-project-mode.sh" delta)" = "direct-PR off" ] \
+    || fail "stripping a marker behind repeated separators changed delta's seeded posture"
+  [ "$(FM_HOME="$sub" "$ROOT/bin/fm-project-mode.sh" epsilon)" = "direct-PR off" ] \
+    || fail "stripping a marker on an indented line changed epsilon's seeded posture"
   FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" validate >/dev/null \
     || fail "registry validation failed after seeding marked projects"
   pass "seed: the per-home +socraticode marker never inherits, and posture survives"
+}
+
+# A re-seed replaces this home's own project line with the parent's, taking with
+# it any marker this home had earned by indexing its own clone. Going dark is
+# tolerable; going dark silently is the failure mode the marker exists to fight,
+# so the drop must name the project and the way back.
+test_reseed_warns_when_it_drops_this_homes_own_marker() {
+  local home sub fakebin err out project status
+  home="$TMP_ROOT/soc-reseed-main"
+  sub="$TMP_ROOT/soc-reseed-sub"
+  err="$TMP_ROOT/soc-reseed.err"
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  for project in alpha beta; do
+    fm_git_init_commit "$home/projects/$project"
+    fm_git_add_origin "$home/projects/$project" "$TMP_ROOT/remotes/soc-reseed-$project.git"
+  done
+  cat > "$home/data/projects.md" <<EOF
+- alpha [direct-PR] - alpha project (added 2026-06-22)
+- beta [direct-PR +socraticode] - beta project (added 2026-06-22)
+EOF
+  fakebin=$(make_fake_no_mistakes "$TMP_ROOT/soc-reseed-fake")
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_SECONDMATE_CHARTER='reseed marker charter' \
+    FM_SECONDMATE_SCOPE='reseed marker charter' \
+    "$ROOT/bin/fm-home-seed.sh" design "$sub" alpha >/dev/null 2>&1 \
+    || fail "initial seed failed"
+
+  # The home earns the marker for its OWN clone - the state the skill authorizes
+  # a local secondmate home to record once its own path is indexed.
+  printf '%s\n' '- alpha [direct-PR +socraticode] - alpha project (added 2026-06-22)' \
+    > "$sub/data/projects.md"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_SECONDMATE_CHARTER='reseed marker charter' \
+    FM_SECONDMATE_SCOPE='reseed marker charter' \
+    "$ROOT/bin/fm-home-seed.sh" design "$sub" alpha beta >/dev/null 2>"$err" \
+    || fail "re-seed of an existing home failed: $(cat "$err")"
+
+  assert_grep "alpha: this home's own +socraticode marker was dropped" "$err" \
+    "the re-seed did not name the project whose earned marker it dropped"
+  assert_grep 're-add the token' "$err" \
+    "the warning did not tell the reader how to earn the marker back"
+  assert_grep 'codebase_list_projects' "$err" \
+    "the warning did not name what must list the path before the token returns"
+  assert_no_grep "beta: this home's own" "$err" \
+    "a marker that was only ever on the parent's line was reported as this home's own"
+
+  status=0
+  out=$(FM_HOME="$sub" "$ROOT/bin/fm-socraticode.sh" alpha 2>&1) || status=$?
+  expect_code 3 "$status" "the re-seed reported a drop it did not make (got: $out)"
+  pass "seed: a dropped home-owned +socraticode marker is reported with its remedy"
 }
 
 test_home_seed_validate_rejects_unparseable_registry_entry() {
@@ -3008,6 +3067,7 @@ test_fm_home_parameterization
 test_lock_status_is_per_home
 test_seed_allows_overlapping_clones_and_drops_owner
 test_seed_does_not_inherit_the_socraticode_marker
+test_reseed_warns_when_it_drops_this_homes_own_marker
 test_home_seed_validate_rejects_unparseable_registry_entry
 test_home_seed_refuses_broken_registry_symlink
 test_home_seed_refuses_unreadable_registry

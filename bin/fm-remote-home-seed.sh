@@ -43,6 +43,8 @@ MAX_MANIFEST_BYTES=1048576
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-project-origin-lib.sh
 . "$SCRIPT_DIR/fm-project-origin-lib.sh"
+# shellcheck source=bin/fm-project-registry-lib.sh
+. "$SCRIPT_DIR/fm-project-registry-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -195,10 +197,7 @@ EOF
   # +socraticode is a per-home assertion that THIS home's own clone has been
   # indexed (AGENTS.md section 13), so it never inherits: carrying it to the
   # remote host would claim coverage for a clone nothing has ever indexed.
-  REGISTRY_LINE=$(printf '%s\n' "$REGISTRY_LINE" | sed -E \
-    -e 's/^(- [^ ]+ \[[^]]*)[[:space:]]\+socraticode/\1/' \
-    -e 's/^(- [^ ]+ \[)\+socraticode[[:space:]]/\1/' \
-    -e 's/^(- [^ ]+) \[\+socraticode\]/\1/')
+  REGISTRY_LINE=$(printf '%s\n' "$REGISTRY_LINE" | fm_registry_strip_socraticode)
   NAME_B64=$(printf '%s' "$project" | encode)
   ORIGIN_B64=$(printf '%s' "$ORIGIN" | encode)
   PROJECT_REG_B64=$(printf '%s' "$REGISTRY_LINE" | encode)

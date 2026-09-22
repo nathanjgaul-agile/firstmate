@@ -49,6 +49,8 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-secondmate-charter-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-project-registry-lib.sh
+. "$SCRIPT_DIR/fm-project-registry-lib.sh"
 
 usage() {
   echo "usage: fm-home-seed.sh <id> <home|-> {<project>...|--no-projects}" >&2
@@ -679,7 +681,7 @@ EOF
 }
 
 sync_project_registry() {
-  local home=$1 sub_reg tmp project line today names
+  local home=$1 sub_reg tmp project line own today names
   shift
   sub_reg="$home/data/projects.md"
   tmp="$sub_reg.tmp.$$"
@@ -697,6 +699,17 @@ sync_project_registry() {
   fi
   today=$(date +%F)
   for project in "$@"; do
+    # A re-seed replaces this home's own line with the parent's. The capability
+    # going dark that way is tolerable; going dark silently is the failure mode
+    # this marker exists to fight, so a marker this home had earned is named on
+    # its way out along with how to earn it back.
+    if [ -f "$sub_reg" ]; then
+      own=$(awk -v n="$project" '$1=="-" && $2==n { print; exit }' "$sub_reg")
+      if [ -n "$own" ] \
+        && [ "$own" != "$(printf '%s\n' "$own" | fm_registry_strip_socraticode)" ]; then
+        echo "warn: $project: this home's own +socraticode marker was dropped because its project line was re-seeded from the parent home; re-add the token in $sub_reg once codebase_list_projects lists $home/projects/$project" >&2
+      fi
+    fi
     line=$(registry_line_for_project "$project" || true)
     if [ -z "$line" ]; then
       line="- $project - cloned project (added $today)"
@@ -704,10 +717,7 @@ sync_project_registry() {
       # +socraticode is a per-home assertion that THIS home's own clone has been
       # indexed (AGENTS.md section 13), so it never inherits: copying it across
       # homes would claim coverage for a clone nothing has ever indexed.
-      line=$(printf '%s\n' "$line" | sed -E \
-        -e 's/^(- [^ ]+ \[[^]]*)[[:space:]]\+socraticode/\1/' \
-        -e 's/^(- [^ ]+ \[)\+socraticode[[:space:]]/\1/' \
-        -e 's/^(- [^ ]+) \[\+socraticode\]/\1/')
+      line=$(printf '%s\n' "$line" | fm_registry_strip_socraticode)
     fi
     printf '%s\n' "$line" >> "$tmp"
   done
