@@ -43,10 +43,10 @@
 #   1  usage error, or the project is not in the registry at all
 #   3  registered but NOT marked +socraticode; use ordinary tools
 #   4  marked +socraticode but this home has no such clone; report the
-#      disagreement rather than degrading silently. Any home whose own clones do
-#      not back its marker lands here, including a remote secondmate home, which
-#      reaches neither this machine's clones nor its server and so is expected
-#      to land here rather than to be "fixed" by indexing.
+#      disagreement rather than degrading silently. A marker never crosses
+#      homes - local and remote seeding both strip it from a copied registry
+#      line - so this state is this home's own marker outliving its own clone,
+#      never an inherited one.
 #
 # Usage: fm-socraticode.sh <project-name>
 set -eu

@@ -192,6 +192,13 @@ EOF
     || die "project $project origin is not an accepted clone URL: $ORIGIN"
   REGISTRY_LINE=$(awk -v p="$project" '$1 == "-" && $2 == p { print; exit }' "$DATA/projects.md" 2>/dev/null || true)
   [ -n "$REGISTRY_LINE" ] || die "project $project has no registry record"
+  # +socraticode is a per-home assertion that THIS home's own clone has been
+  # indexed (AGENTS.md section 13), so it never inherits: carrying it to the
+  # remote host would claim coverage for a clone nothing has ever indexed.
+  REGISTRY_LINE=$(printf '%s\n' "$REGISTRY_LINE" | sed -E \
+    -e 's/^(- [^ ]+ \[[^]]*)[[:space:]]\+socraticode/\1/' \
+    -e 's/^(- [^ ]+ \[)\+socraticode[[:space:]]/\1/' \
+    -e 's/^(- [^ ]+) \[\+socraticode\]/\1/')
   NAME_B64=$(printf '%s' "$project" | encode)
   ORIGIN_B64=$(printf '%s' "$ORIGIN" | encode)
   PROJECT_REG_B64=$(printf '%s' "$REGISTRY_LINE" | encode)

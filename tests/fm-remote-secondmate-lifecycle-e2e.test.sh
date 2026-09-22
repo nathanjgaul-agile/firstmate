@@ -478,7 +478,7 @@ git -C "$TMP_ROOT/beta-src" remote add origin "file://$TMP_ROOT/beta.git"
 git -C "$TMP_ROOT/beta-src" push -q -u origin HEAD
 rm -rf "$TMP_ROOT/beta-src"
 cat > "$TMP_ROOT/seed-parent/data/projects.md" <<'EOF'
-- beta [direct-PR] - beta project (added 2026-08-06)
+- beta [direct-PR +socraticode] - beta project (added 2026-08-06)
 - delta [local-only] - delta project (added 2026-08-06)
 EOF
 BETA_ORIGIN="file://$TMP_ROOT/beta.git"
@@ -536,6 +536,17 @@ assert_present "$TMP_ROOT/seed-noclone-home/projects/beta/README.md" \
   || fail "the remote clone did not come from the supplied origin"
 assert_grep '- beta [direct-PR]' "$TMP_ROOT/seed-noclone-home/data/projects.md" \
   "the remote home did not publish the project's registered posture"
+# The +socraticode marker asserts that THIS home's own clone is indexed, so it
+# never crosses to a host that reaches neither the index nor the server.
+soc_status=0
+soc_out=$(FM_HOME="$TMP_ROOT/seed-noclone-home" "$ROOT/bin/fm-socraticode.sh" beta 2>&1) || soc_status=$?
+expect_code 3 "$soc_status" "the remote home inherited the +socraticode marker (got: $soc_out)"
+assert_contains "$soc_out" "registry: not-marked" \
+  "the remote home must report beta unmarked (got: $soc_out)"
+assert_not_contains "$soc_out" "$TMP_ROOT/seed-noclone-home/projects/beta" \
+  "the remote home handed out an unindexed projectPath (got: $soc_out)"
+[ "$(FM_HOME="$TMP_ROOT/seed-noclone-home" "$ROOT/bin/fm-project-mode.sh" beta)" = "direct-PR off" ] \
+  || fail "stripping the marker changed beta's provisioned delivery posture"
 assert_absent "$TMP_ROOT/seed-parent/projects/beta" \
   "seeding cloned the project into the primary project tree"
 [ "$(projects_snapshot "$TMP_ROOT/seed-parent/projects")" = "$PROJECTS_BEFORE" ] \

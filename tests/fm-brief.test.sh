@@ -1087,6 +1087,10 @@ test_socraticode_section_carries_the_worker_contract() {
       "$kind brief must forbid omitting projectPath"
     assert_grep "codebase_index" "$brief" \
       "$kind brief must name the indexing tools it forbids"
+    assert_grep "codebase_graph_build" "$brief" \
+      "$kind brief must forbid rebuilding the shared dependency graph"
+    assert_grep "codebase_context_remove" "$brief" \
+      "$kind brief must forbid deleting context the watcher does not restore"
     assert_grep "It cannot see your changes" "$brief" \
       "$kind brief must carry the main-checkout blind spot"
     assert_grep "not branch-aware" "$brief" \

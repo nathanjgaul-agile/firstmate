@@ -438,7 +438,7 @@ Prefer it over a grep-and-read sweep for orientation questions; one query typica
 That is the indexed main checkout. Never pass your own worktree path, and never omit the argument - omitting it resolves to your working directory.
 A worktree path or an omitted path looks like a brand-new project, reports \`No index found\`, and invites a full re-index of a checkout that is deleted at teardown.
 
-Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebase_prune\`, \`codebase_remove\`, or \`codebase_stop\`.
+Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebase_prune\`, \`codebase_remove\`, \`codebase_stop\`, \`codebase_graph_build\`, \`codebase_graph_remove\`, \`codebase_context_index\`, or \`codebase_context_remove\`.
 Indexing is not yours to start; the project already has a file watcher keeping it current.
 If you see \`No index found\`, your path was wrong - fix the path, or fall back to ordinary tools and say so in your report.
 

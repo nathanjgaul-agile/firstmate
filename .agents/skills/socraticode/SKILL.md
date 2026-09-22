@@ -45,7 +45,7 @@ Following that instruction would embed the whole repository again, per worktree,
 Two rules follow, and neither has an exception:
 
 - Never call a SocratiCode tool without `projectPath`, and never pass a worktree path.
-- Never run `codebase_index`, `codebase_update`, `codebase_watch`, `codebase_prune`, `codebase_remove`, or `codebase_stop`.
+- Never run `codebase_index`, `codebase_update`, `codebase_watch`, `codebase_prune`, `codebase_remove`, `codebase_stop`, `codebase_graph_build`, `codebase_graph_remove`, `codebase_context_index`, or `codebase_context_remove`.
   Indexing is the captain's decision and the enabled projects already run a file watcher.
   A `No index found` reply means the path was wrong or the project is not enabled, never that you should index it.
 
@@ -102,6 +102,14 @@ When work routes to a remote home, treat SocratiCode as unavailable there and sa
 
 Marking a project `+socraticode` records that it is already indexed.
 It does not index anything, and this fleet never indexes a project the captain has not chosen to enable.
+
+To mark one, confirm first that `codebase_list_projects` lists this home's own `projects/<name>` absolute path, and never mark a project whose own path is not listed.
+Then add `+socraticode` as an additional token inside the project's existing bracket annotation in `data/projects.md`, creating `[+socraticode]` only where the line carries no bracket at all.
+Never write it in place of the mode token, and never add a second bracket.
+
+The leading `+` is what keeps the two readings apart, because the delivery gate and this capability share one bracket annotation and one parser.
+A marker written without it is read as a mode token instead: `bin/fm-project-mode.sh` warns `unknown mode` and falls through to `no-mistakes` with yolo off, silently discarding that project's registered delivery posture and its merge authority.
+`data/` is gitignored runtime state, so this marking is necessarily an operational edit made in each home; no commit can carry the token.
 
 Three improvements are deliberately not built:
 
