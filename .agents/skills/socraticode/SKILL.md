@@ -47,6 +47,7 @@ Two rules follow, and neither has an exception:
 - Never call a project-scoped SocratiCode tool without `projectPath`, and never pass a worktree path.
 - Never run `codebase_index`, `codebase_update`, `codebase_watch`, `codebase_prune`, `codebase_remove`, `codebase_stop`, `codebase_graph_build`, `codebase_graph_remove`, `codebase_context_index`, or `codebase_context_remove`.
   Indexing is the captain's decision and the enabled projects already run a file watcher.
+  That ban is about indexing the codebase: `codebase_context_search` self-indexes only the project's own declared context artifacts on first use, and stays available.
   A `No index found` reply means the path was wrong or the project is not enabled, never that you should index it.
 
 ## Confirming a project is enabled

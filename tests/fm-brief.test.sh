@@ -1099,6 +1099,8 @@ test_socraticode_section_carries_the_worker_contract() {
       "$kind brief must forbid rebuilding the shared dependency graph"
     assert_grep "codebase_context_remove" "$brief" \
       "$kind brief must forbid deleting context the watcher does not restore"
+    assert_grep "self-indexes only the project's own declared context artifacts" "$brief" \
+      "$kind brief must reconcile the indexing ban with the recommended context search"
     assert_grep "It cannot see your changes" "$brief" \
       "$kind brief must carry the main-checkout blind spot"
     assert_grep "not branch-aware" "$brief" \
@@ -1157,6 +1159,28 @@ test_socraticode_is_absent_unless_requested_and_refuses_bad_input() {
     --socraticode "$home" >/dev/null 2>&1
   assert_grep "projectPath: $home" "$home/data/soc-self/brief.md" \
     "the home itself must be accepted when the subject is the firstmate repo"
+
+  # A seeded secondmate home's own root is a firstmate worktree, not an indexed
+  # main checkout, so the value the main home legitimately accepts is exactly
+  # the worktree shape this guard exists to reject once the marker is present.
+  local sub
+  sub="$TMP_ROOT/socraticode-sub-home"
+  mkdir -p "$sub/data"
+  printf '%s\n' design > "$sub/.fm-secondmate-home"
+  status=0
+  out=$(FM_HOME="$sub" "$ROOT/bin/fm-brief.sh" soc-sub-self firstmate --scout \
+    --socraticode "$sub" 2>&1) || status=$?
+  expect_code 1 "$status" "a secondmate home's own root must be rejected as a projectPath"
+  assert_contains "$out" "$sub" \
+    "the refusal must name the value given (got: $out)"
+  assert_contains "$out" "$sub/projects/firstmate" \
+    "the refusal must name this home's expected checkout (got: $out)"
+  assert_absent "$sub/data/soc-sub-self/brief.md" \
+    "rejected secondmate-home root --socraticode still wrote a brief"
+  FM_HOME="$sub" "$ROOT/bin/fm-brief.sh" soc-sub-clone jcat --mode no-mistakes \
+    --socraticode "$sub/projects/jcat" >/dev/null 2>&1
+  assert_grep "projectPath: $sub/projects/jcat" "$sub/data/soc-sub-clone/brief.md" \
+    "a secondmate home's own clone of the subject project must still be accepted"
 
   status=0
   FM_HOME="$home" FM_SECONDMATE_CHARTER=ops "$ROOT/bin/fm-brief.sh" soc-second \

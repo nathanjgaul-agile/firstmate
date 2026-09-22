@@ -37,8 +37,9 @@
 #   --mode, the value is resolved by the caller rather than guessed here: this
 #   script never reads data/projects.md. It must be this home's own main checkout
 #   of the subject - $FM_HOME/projects/<repo-name>, or $FM_HOME itself when the
-#   subject is the firstmate repo - which is what codebase_list_projects lists,
-#   and never a task worktree; anything else is refused. The
+#   subject is the firstmate repo and this home is not a seeded secondmate home,
+#   whose own root is a firstmate worktree - which is what codebase_list_projects
+#   lists, and never a task worktree; anything else is refused. The
 #   agent-only `socraticode` skill owns that confirmation and the wider decision
 #   procedure; this scaffold carries only what the worker needs, because a
 #   crewmate in a project worktree cannot load a firstmate skill. Omitted, the
@@ -122,6 +123,8 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
 
@@ -216,21 +219,30 @@ if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
 fi
 
 # A task worktree path is absolute too, so absoluteness alone would let through
-# the exact mistake the contract exists to prevent. The value must be one of the
-# two main checkouts this home can offer: its clone of the subject project, or
-# the firstmate repo itself when the home is that repo. Both are already in hand
-# here, so no registry read is needed and an unusable value stops the scaffold
-# instead of reaching a worker.
+# the exact mistake the contract exists to prevent. The value must be a main
+# checkout this home can actually offer: its clone of the subject project, or
+# the home itself when the home is the firstmate repo's own main checkout. A
+# seeded secondmate home is itself a firstmate worktree, so it offers only the
+# first. Both facts are this script's own identity rather than a resolution of
+# the caller's value, so an unusable value stops the scaffold instead of
+# reaching a worker.
 if [ "$SOCRATICODE_SET" -eq 1 ]; then
   if [ "$KIND" = secondmate ]; then
     echo "error: --socraticode applies only to crewmate ship or scout briefs" >&2
     exit 1
   fi
   SOCRATICODE_PROJECT_PATH="$FM_HOME/projects/${POS[1]:-}"
+  if fm_root_is_secondmate_home "$FM_HOME"; then
+    SOCRATICODE_SELF_PATH=
+    SOCRATICODE_EXPECTED="'$SOCRATICODE_PROJECT_PATH', never a task worktree; this home is a seeded secondmate home, so '$FM_HOME' is itself a firstmate worktree rather than an indexed main checkout"
+  else
+    SOCRATICODE_SELF_PATH="$FM_HOME"
+    SOCRATICODE_EXPECTED="'$SOCRATICODE_PROJECT_PATH', or '$FM_HOME' when the subject is the firstmate repo itself, never a task worktree"
+  fi
   case "$SOCRATICODE_PATH" in
-    "$SOCRATICODE_PROJECT_PATH"|"$FM_HOME") ;;
     "") echo "error: --socraticode requires the absolute main-checkout path that codebase_list_projects lists" >&2; exit 1 ;;
-    /*) echo "error: --socraticode path must be this home's own main checkout (got '$SOCRATICODE_PATH'); expected '$SOCRATICODE_PROJECT_PATH', or '$FM_HOME' when the subject is the firstmate repo itself, never a task worktree" >&2; exit 1 ;;
+    "$SOCRATICODE_PROJECT_PATH"|"$SOCRATICODE_SELF_PATH") ;;
+    /*) echo "error: --socraticode path must be this home's own main checkout (got '$SOCRATICODE_PATH'); expected $SOCRATICODE_EXPECTED" >&2; exit 1 ;;
     *) echo "error: --socraticode path must be absolute (got '$SOCRATICODE_PATH'); pass the main checkout that codebase_list_projects lists, never a task worktree" >&2; exit 1 ;;
   esac
 fi
@@ -449,6 +461,7 @@ Only \`codebase_list_projects\`, \`codebase_about\`, and \`codebase_health\` tak
 
 Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebase_prune\`, \`codebase_remove\`, \`codebase_stop\`, \`codebase_graph_build\`, \`codebase_graph_remove\`, \`codebase_context_index\`, or \`codebase_context_remove\`.
 Indexing is not yours to start; the project already has a file watcher keeping it current.
+That ban is about indexing the codebase: \`codebase_context_search\` self-indexes only the project's own declared context artifacts on first use, and stays available to you.
 If you see \`No index found\`, your path was wrong - fix the path, or fall back to ordinary tools and say so in your report.
 
 **It cannot see your changes.** The index covers the main checkout, not your worktree, and it is not branch-aware.
