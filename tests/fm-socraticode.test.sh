@@ -35,6 +35,8 @@ make_home() {
 - bare-flag [+socraticode] - the marker with no mode token beside it (added 2026-09-04)
 - bare-both [+socraticode +yolo] - flags alone, yolo among them (added 2026-09-05)
 - bare-yolo [+yolo] - the long-supported flags-only spelling (added 2026-09-06)
+- mis-mode [+socraticode local-only] - the mode written after the marker (added 2026-09-07)
+- mis-yolo [+socraticode +yolo direct-PR] - a misplaced mode beside +yolo (added 2026-09-08)
 REG
   mkdir -p "$TMP_ROOT/$home/projects/marked" "$TMP_ROOT/$home/projects/plain" \
     "$TMP_ROOT/$home/projects/legacy" "$TMP_ROOT/$home/projects/yolo-too" \
@@ -90,6 +92,28 @@ test_flag_only_annotation_keeps_the_default_mode_and_its_flags() {
   expect_code 0 "$SOC_RC" \
     "a flag-only annotation must still read as enabled (got: $SOC_OUT)"
   pass "fm-socraticode: a flag-only annotation keeps the default mode and its flags"
+}
+
+# The mode is only ever the first token. A line that writes it after the marker
+# means a posture the parser cannot honour, so it must say so instead of
+# resolving to the default in silence - and it must never leave yolo on, or a
+# malformed line would grant merge authority the captain never registered.
+test_misplaced_mode_token_warns_and_falls_back() {
+  local home err
+  home=$(make_home misplaced)
+  assert_equals "no-mistakes off" "$(FM_HOME="$home" "$MODE" mis-mode 2>/dev/null)" \
+    "a mode written after the marker must fall back to the default posture"
+  err=$(FM_HOME="$home" "$MODE" mis-mode 2>&1 >/dev/null)
+  assert_contains "$err" "local-only" \
+    "the warning must name the misplaced token (got: $err)"
+  assert_equals "no-mistakes off" "$(FM_HOME="$home" "$MODE" mis-yolo 2>/dev/null)" \
+    "a malformed line must never resolve yolo on"
+  assert_equals "no-mistakes off" "$(FM_HOME="$home" "$MODE" --raw mis-mode 2>/dev/null)" \
+    "--raw must report the same fallback rather than the unreadable posture"
+  assert_equals "+socraticode local-only" \
+    "$(FM_HOME="$home" "$MODE" --annotation mis-mode 2>/dev/null)" \
+    "--annotation stays a verbatim read of whatever the line carries"
+  pass "fm-socraticode: a misplaced mode token warns and falls back"
 }
 
 # --annotation exists so capability readers reuse the single registry parser.
@@ -177,6 +201,7 @@ test_unregistered_project_and_usage_errors_fail_closed() {
 
 test_marker_never_changes_delivery_posture
 test_flag_only_annotation_keeps_the_default_mode_and_its_flags
+test_misplaced_mode_token_warns_and_falls_back
 test_annotation_query_is_a_raw_registry_read
 test_enabled_project_reports_the_path_to_verify
 test_unmarked_project_is_distinguishable_and_pathless

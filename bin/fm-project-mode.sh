@@ -19,7 +19,10 @@
 #
 # The annotation is a space-separated token list: every "+"-prefixed token is an
 # additive flag, in any position, and a leading token without that prefix is the
-# mode. An annotation of flags alone leaves the mode at its default. Flags this
+# mode. An annotation of flags alone leaves the mode at its default. A token past
+# the first that lacks the "+" prefix can only be a misplaced mode, so it is an
+# error: the parser warns and falls back to "no-mistakes off" rather than
+# resolving a posture the line does not mean. Flags this
 # script does not interpret are preserved rather than rejected, so a capability
 # marker such as +socraticode (AGENTS.md section 13) never changes a project's
 # delivery posture. --annotation prints that token list verbatim so capability
@@ -69,20 +72,23 @@ if [ ! -f "$REG" ]; then
   exit 0
 fi
 
-# awk emits one tab-separated "<mode>\t<yolo>\t<annotation>" line, or nothing if
-# the project is absent. The annotation field is the verbatim bracket contents
-# and is empty for a legacy line that has none.
+# awk emits one tab-separated "<mode>\t<yolo>\t<misplaced>\t<annotation>" line,
+# or nothing if the project is absent. The misplaced field names the first token
+# past the leading one that is not a "+" flag, and is empty on a well-formed
+# line. The annotation field is the verbatim bracket contents and is empty for a
+# legacy line that has none.
 parsed=$(awk -v n="$NAME" '
   $1=="-" && $2==n {
-    mode="no-mistakes"; yolo="off"; s="";
+    mode="no-mistakes"; yolo="off"; s=""; bad="";
     if ($3 ~ /^\[/) {
       for (i=3; i<=NF; i++) { s = s (s==""?"":" ") $i; if ($i ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
       if (a[1] != "" && a[1] !~ /^\+/) mode = a[1];
+      for (j=2; j<=k; j++) if (a[j] !~ /^\+/) { bad = a[j]; break }
       for (j=1; j<=k; j++) if (a[j]=="+yolo") yolo="on";
     }
-    print mode "\t" yolo "\t" s; exit
+    print mode "\t" yolo "\t" bad "\t" s; exit
   }
 ' "$REG")
 
@@ -99,6 +105,8 @@ fi
 mode=${parsed%%	*}
 rest=${parsed#*	}
 yolo=${rest%%	*}
+rest=${rest#*	}
+misplaced=${rest%%	*}
 annotation=${rest#*	}
 
 # An annotation query is a raw read of the registered token list, so it reports
@@ -106,6 +114,11 @@ annotation=${rest#*	}
 if [ "$ANNOTATION" -eq 1 ]; then
   printf '%s\n' "$annotation"
   exit 0
+fi
+if [ -n "$misplaced" ]; then
+  echo "warn: misplaced token \"$misplaced\" in the annotation for $NAME; the mode must be the first token and every later token must be a \"+\" flag; defaulting to no-mistakes off" >&2
+  mode=no-mistakes
+  yolo=off
 fi
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;

@@ -109,8 +109,9 @@ Marking a project `+socraticode` records that it is already indexed.
 It does not index anything, and this fleet never indexes a project the captain has not chosen to enable.
 
 To mark one, confirm first that `codebase_list_projects` lists this home's own `projects/<name>` absolute path, and never mark a project whose own path is not listed.
-Then add `+socraticode` as an additional token inside the project's existing bracket annotation in `data/projects.md`, creating `[+socraticode]` only where the line carries no bracket at all.
-Never write it in place of the mode token, and never add a second bracket.
+Then append `+socraticode` after the mode token inside the project's existing bracket annotation in `data/projects.md` - `[local-only]` becomes `[local-only +socraticode]` - creating `[+socraticode]` only where the line carries no bracket at all.
+Never write it in place of the mode token, never write it before the mode token, and never add a second bracket.
+The mode is only ever the first token, so `[+socraticode local-only]` is a malformed line: `bin/fm-project-mode.sh` warns about the misplaced token and falls back to `no-mistakes` with yolo off rather than reading the posture the line was meant to carry.
 
 The leading `+` is what keeps the two readings apart, because the delivery gate and this capability share one bracket annotation and one parser.
 A marker written without it is read as a mode token instead: `bin/fm-project-mode.sh` warns `unknown mode` and falls through to `no-mistakes` with yolo off, silently discarding that project's registered delivery posture and its merge authority.
