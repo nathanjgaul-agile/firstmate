@@ -33,7 +33,7 @@ Even where several worktrees deliberately share one index, that is still one ind
 
 ## Always pass an explicit projectPath
 
-Every SocratiCode tool that reads a codebase takes a `projectPath`; only `codebase_list_projects` and `codebase_about` take no parameters at all, because they describe the server rather than a project.
+Every SocratiCode tool that reads a codebase takes a `projectPath`; `codebase_list_projects`, `codebase_about`, and `codebase_health` take no parameters at all, because they describe the server rather than a project.
 Always pass the absolute path of the indexed main checkout, exactly as `codebase_list_projects` prints it.
 
 This rule is mandatory, and it is a spend control rather than a style preference.

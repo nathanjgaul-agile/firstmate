@@ -1074,14 +1074,14 @@ test_socraticode_section_carries_the_worker_contract() {
     id="socraticode-$kind"
     case "$kind" in
       ship) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" jcat --mode no-mistakes \
-              --socraticode /main/checkout/jcat >/dev/null 2>&1 ;;
+              --socraticode "$home/projects/jcat" >/dev/null 2>&1 ;;
       scout) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" jcat --scout \
-              --socraticode /main/checkout/jcat >/dev/null 2>&1 ;;
+              --socraticode "$home/projects/jcat" >/dev/null 2>&1 ;;
     esac
     brief="$home/data/$id/brief.md"
     assert_grep "# Codebase intelligence (SocratiCode)" "$brief" \
       "$kind --socraticode brief missing the section"
-    assert_grep "projectPath: /main/checkout/jcat" "$brief" \
+    assert_grep "projectPath: $home/projects/jcat" "$brief" \
       "$kind brief must name the exact indexed path to pass"
     assert_grep "on every SocratiCode tool call that takes one" "$brief" \
       "$kind brief must bind the path rule to the calls that take a projectPath"
@@ -1089,6 +1089,10 @@ test_socraticode_section_carries_the_worker_contract() {
       "$kind brief must forbid omitting projectPath"
     assert_grep "take no parameters at all" "$brief" \
       "$kind brief must name the tools the path rule does not cover"
+    assert_grep 'codebase_health` take no parameters at all' "$brief" \
+      "$kind brief must count codebase_health among the parameterless tools"
+    assert_no_grep "every other tool takes that path" "$brief" \
+      "$kind brief must not claim every other tool takes a projectPath"
     assert_grep "codebase_index" "$brief" \
       "$kind brief must name the indexing tools it forbids"
     assert_grep "codebase_graph_build" "$brief" \
@@ -1130,9 +1134,33 @@ test_socraticode_is_absent_unless_requested_and_refuses_bad_input() {
   assert_absent "$home/data/soc-rel/brief.md" \
     "rejected --socraticode still wrote a brief"
 
+  # A task worktree path is absolute, so the absolute check alone would pass it
+  # through as the one legal projectPath and every call would miss the index.
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" soc-worktree jcat --mode no-mistakes \
+    --socraticode /tmp/treehouse/jcat-ea62ed/2/jcat 2>&1) || status=$?
+  expect_code 1 "$status" "an absolute worktree-shaped --socraticode path must be rejected"
+  assert_contains "$out" "/tmp/treehouse/jcat-ea62ed/2/jcat" \
+    "the refusal must name the value given (got: $out)"
+  assert_contains "$out" "$home/projects/jcat" \
+    "the refusal must name this home's expected checkout (got: $out)"
+  assert_absent "$home/data/soc-worktree/brief.md" \
+    "rejected worktree-shaped --socraticode still wrote a brief"
+
+  # The two accepted values: this home's clone of the subject project, and the
+  # home itself for a task whose subject is the firstmate repo.
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" soc-clone jcat --mode no-mistakes \
+    --socraticode "$home/projects/jcat" >/dev/null 2>&1
+  assert_grep "projectPath: $home/projects/jcat" "$home/data/soc-clone/brief.md" \
+    "this home's own clone of the subject project must be accepted"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" soc-self firstmate --scout \
+    --socraticode "$home" >/dev/null 2>&1
+  assert_grep "projectPath: $home" "$home/data/soc-self/brief.md" \
+    "the home itself must be accepted when the subject is the firstmate repo"
+
   status=0
   FM_HOME="$home" FM_SECONDMATE_CHARTER=ops "$ROOT/bin/fm-brief.sh" soc-second \
-    --secondmate jcat --socraticode /main/checkout/jcat >/dev/null 2>&1 || status=$?
+    --secondmate jcat --socraticode "$home/projects/jcat" >/dev/null 2>&1 || status=$?
   expect_code 1 "$status" "secondmate --socraticode must be rejected"
   assert_absent "$home/data/soc-second/brief.md" \
     "rejected secondmate --socraticode still wrote a brief"

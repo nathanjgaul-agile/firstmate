@@ -35,8 +35,10 @@
 #   --socraticode <projectPath> adds the SocratiCode usage contract to a ship or
 #   scout brief, for a project the caller has already confirmed is indexed. Like
 #   --mode, the value is resolved by the caller rather than guessed here: this
-#   script never reads data/projects.md, and the path must be the absolute main
-#   checkout that codebase_list_projects lists, never a task worktree. The
+#   script never reads data/projects.md. It must be this home's own main checkout
+#   of the subject - $FM_HOME/projects/<repo-name>, or $FM_HOME itself when the
+#   subject is the firstmate repo - which is what codebase_list_projects lists,
+#   and never a task worktree; anything else is refused. The
 #   agent-only `socraticode` skill owns that confirmation and the wider decision
 #   procedure; this scaffold carries only what the worker needs, because a
 #   crewmate in a project worktree cannot load a firstmate skill. Omitted, the
@@ -213,16 +215,22 @@ if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   exit 1
 fi
 
-# A relative or worktree-shaped path is the exact mistake the contract exists to
-# prevent, so an unusable value stops the scaffold instead of reaching a worker.
+# A task worktree path is absolute too, so absoluteness alone would let through
+# the exact mistake the contract exists to prevent. The value must be one of the
+# two main checkouts this home can offer: its clone of the subject project, or
+# the firstmate repo itself when the home is that repo. Both are already in hand
+# here, so no registry read is needed and an unusable value stops the scaffold
+# instead of reaching a worker.
 if [ "$SOCRATICODE_SET" -eq 1 ]; then
   if [ "$KIND" = secondmate ]; then
     echo "error: --socraticode applies only to crewmate ship or scout briefs" >&2
     exit 1
   fi
+  SOCRATICODE_PROJECT_PATH="$FM_HOME/projects/${POS[1]:-}"
   case "$SOCRATICODE_PATH" in
-    /*) ;;
+    "$SOCRATICODE_PROJECT_PATH"|"$FM_HOME") ;;
     "") echo "error: --socraticode requires the absolute main-checkout path that codebase_list_projects lists" >&2; exit 1 ;;
+    /*) echo "error: --socraticode path must be this home's own main checkout (got '$SOCRATICODE_PATH'); expected '$SOCRATICODE_PROJECT_PATH', or '$FM_HOME' when the subject is the firstmate repo itself, never a task worktree" >&2; exit 1 ;;
     *) echo "error: --socraticode path must be absolute (got '$SOCRATICODE_PATH'); pass the main checkout that codebase_list_projects lists, never a task worktree" >&2; exit 1 ;;
   esac
 fi
@@ -437,7 +445,7 @@ Prefer it over a grep-and-read sweep for orientation questions; one query typica
 **Always pass \`projectPath: $SOCRATICODE_PATH\` on every SocratiCode tool call that takes one.**
 That is the indexed main checkout. Never pass your own worktree path, and never omit the argument - omitting it resolves to your working directory.
 A worktree path or an omitted path looks like a brand-new project, reports \`No index found\`, and invites a full re-index of a checkout that is deleted at teardown.
-Only \`codebase_list_projects\` and \`codebase_about\` take no parameters at all; every other tool takes that path.
+Only \`codebase_list_projects\`, \`codebase_about\`, and \`codebase_health\` take no parameters at all; every project-scoped tool takes that path.
 
 Never run \`codebase_index\`, \`codebase_update\`, \`codebase_watch\`, \`codebase_prune\`, \`codebase_remove\`, \`codebase_stop\`, \`codebase_graph_build\`, \`codebase_graph_remove\`, \`codebase_context_index\`, or \`codebase_context_remove\`.
 Indexing is not yours to start; the project already has a file watcher keeping it current.
