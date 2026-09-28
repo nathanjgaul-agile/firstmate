@@ -327,7 +327,38 @@ test_run_timed_passes_a_natural_exit_through_a_fired_bound() {
   pass 'fm_run_timed passes a natural exit through when the bound fired after completion'
 }
 
+# Bash 3.2, the only bash on a stock macOS host, has no BASHPID, so under
+# set -u the owner check must not expand it bare, whether the bound replaces a
+# top-level script or a subshell.
+test_runs_under_set_u_on_every_available_bash() {
+  local shell form out err rc
+  for shell in /bin/bash "$(command -v bash)"; do
+    if [ ! -x "$shell" ]; then
+      echo "SKIP: $shell is not present"
+      continue
+    fi
+    for form in top subshell; do
+      err="$TMP_ROOT/set-u-$form.err"
+      rc=0
+      out=$("$shell" -c '
+        set -u
+        . "$1/bin/fm-timeout-lib.sh"
+        if [ "$2" = top ]; then
+          fm_exec_timed 5 1 bash -c "echo ran; exit 7"
+        else
+          ( fm_exec_timed 5 1 bash -c "echo ran; exit 7" )
+        fi
+      ' _ "$ROOT" "$form" 2>"$err") || rc=$?
+      [ "$rc" -eq 7 ] && [ "$out" = ran ] \
+        || fail "fm_exec_timed under $shell ($("$shell" -c 'echo "$BASH_VERSION"'), $form) gave rc=$rc out=$out: $(cat "$err")"
+      [ ! -s "$err" ] || fail "fm_exec_timed under $shell ($form) wrote to stderr: $(cat "$err")"
+    done
+  done
+  pass "fm_exec_timed runs under set -u on every available bash"
+}
+
 test_passes_the_command_status_and_output_through
+test_runs_under_set_u_on_every_available_bash
 test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death
 test_run_timed_passes_a_natural_exit_through_a_fired_bound
 test_term_ends_a_cooperative_command_at_the_bound
