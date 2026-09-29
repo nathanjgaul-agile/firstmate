@@ -26,6 +26,11 @@
 #
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
 #
+# A task whose recorded PR has a team-review record (fm_pr_team_review_state in
+# bin/fm-pr-lib.sh) ends the line with `team review: in team review <url>` or
+# `team review: done <url>`, whatever the state, so a PR out with the project's
+# human reviewers never reads as merely ready and waiting on a merge decision.
+#
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
 #      recording remote_host= is a remote secondmate: its worktree and endpoint
@@ -203,10 +208,12 @@ FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 SEP=' · '
 
+TEAM_REVIEW_DETAIL=
 # Emit the one canonical line and exit 0. Detail is optional.
 emit() {  # <state> <source> [detail]
   local line="state: $1${SEP}source: $2"
   [ -n "${3:-}" ] && line="$line${SEP}$3"
+  [ -z "$TEAM_REVIEW_DETAIL" ] || line="$line${SEP}$TEAM_REVIEW_DETAIL"
   printf '%s\n' "$line"
   exit 0
 }
@@ -224,6 +231,10 @@ KIND=$(meta_value kind)
 HARNESS=$(meta_value harness)
 REMOTE_HOST=$(meta_value remote_host)
 [ -n "$KIND" ] || KIND=ship
+case "$(fm_pr_team_review_state "$META")" in
+  in-review) TEAM_REVIEW_DETAIL="team review: in team review $(meta_value pr)" ;;
+  done) TEAM_REVIEW_DETAIL="team review: done $(meta_value pr)" ;;
+esac
 
 # A torn-down (or never-created) worktree has no current state to read. A
 # remote secondmate's recorded worktree is a path on ITS host, so the local

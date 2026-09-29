@@ -2588,6 +2588,64 @@ test_own_work_wait_keeps_first_alert_then_long_cadence() {
   pass "own-work waits keep one first alert, then bounded rechecks without wedges; undeclared idle still alarms"
 }
 
+# A PR recorded in team review declares its task's wait through the command's
+# own status line, so an idle worker keeps one first-sight alert and then the
+# same bounded paused cadence, with no repeated alerts or wedge escalations.
+# The current-state fixture is not live-harness evidence.
+test_team_review_wait_takes_the_paused_cadence() {
+  local dir state fakebin out capture_file statusf window key sig pid round url=https://github.com/o/r/pull/41
+  dir=$(make_case team-review-wait); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/reviewed.status"
+  window="test:fm-reviewed"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf 'idle worker whose PR is out for team review\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\npr=%s\n' "$window" "$url" > "$state/reviewed.meta"
+  printf 'done: PR %s checks green\n' "$url" > "$statusf"
+  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-pr-check.sh" --team-review in-review reviewed >/dev/null \
+    || fail "could not record team review"
+  grep -q '^paused \[key=team-review\]' "$statusf" || fail "team review did not declare the wait"
+  set_mtime "$(( $(date +%s) - 500 ))" "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-reviewed_status"
+  printf '%s' "$(hash_text "$(cat "$capture_file")")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok \
+    FM_FAKE_CREW_STATE="state: paused · source: status-log · PR $url in team review" \
+    watch_bg "$state" "$fakebin" "$out" env FM_PAUSE_RESURFACE_SECS=999
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "team review wait lost its first-sight alert"; }
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "team review wait did not surface as a plain stale"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the team review first alert"
+
+  for round in 1 2; do
+    printf '%s\n' $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=grok \
+      FM_FAKE_CREW_STATE="state: paused · source: status-log · PR $url in team review" \
+      watch_bg "$state" "$fakebin" "$dir/recheck.out" env \
+        FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999
+    pid=$!
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "team review wait repeated an alert in round $round: $(cat "$dir/recheck.out")"; }
+    [ ! -s "$dir/recheck.out" ] || { reap "$pid"; fail "team review wait printed a repeated alert"; }
+    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "team review wait queued a repeated alert"; }
+    [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; fail "team review wait counted a wedge"; }
+    reap "$pid"
+    ack_stopped_cycle "$state" || fail "could not acknowledge the team review test stop"
+  done
+
+  set_mtime "$(( $(date +%s) - 500 ))" "$state/.paused-resurfaced-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok \
+    FM_FAKE_CREW_STATE="state: paused · source: status-log · PR $url in team review" \
+    watch_bg "$state" "$fakebin" "$dir/long-cadence.out" env \
+      FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=240
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "team review wait never rechecked on the long cadence"; }
+  grep -F 'awaiting external' "$dir/long-cadence.out" >/dev/null || fail "team review recheck lost its pause reason"
+  grep -F 'possible wedge' "$dir/long-cadence.out" >/dev/null && fail "team review recheck became a wedge"
+  pass "a PR in team review keeps one first alert, then bounded rechecks without wedge escalations"
+}
+
 # A captain-held crew can leave a stable backend endpoint after its agent exits.
 # fm-crew-state then authoritatively reports stopped rather than paused, but the
 # confirmed-dead agent plus the declared wait or captain-held transfer must retain
@@ -6700,6 +6758,7 @@ test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_own_work_wait_keeps_first_alert_then_long_cadence
+test_team_review_wait_takes_the_paused_cadence
 test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
 test_live_paused_until_controls_recheck_time

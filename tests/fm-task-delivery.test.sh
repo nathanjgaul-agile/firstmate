@@ -1612,6 +1612,43 @@ EOF
   pass "fm-project-mode: --branch-prefix resolves order-independently and defaults to the legacy fm/ prefix"
 }
 
+# +team-review is an order-independent opt-in read only through --team-review:
+# it never becomes the mode, never changes the default "<mode> <yolo>" output,
+# and a project without it, an unregistered one, or an absent registry is off.
+test_project_mode_resolves_team_review() {
+  local home out
+  home="$TMP_ROOT/project-mode-team-review/home"
+  mkdir -p "$home/data"
+  cat > "$home/data/projects.md" <<'EOF'
+- plainproj - fixture with no annotation (added 2026-01-01)
+- afterproj [no-mistakes +team-review] - fixture with the opt-in after the mode (added 2026-01-01)
+- beforeproj [+team-review direct-PR +yolo branch=fix/] - fixture with the opt-in first (added 2026-01-01)
+- conditionalproj [no-mistakes-prod-only +team-review] - fixture with a conditional policy (added 2026-01-01)
+
+EOF
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review plainproj 2>/dev/null)
+  [ "$out" = off ] || fail "a project with no +team-review must not require team review (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review afterproj 2>/dev/null)
+  [ "$out" = on ] || fail "a +team-review after the mode was not resolved (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" afterproj 2>&1)
+  [ "$out" = "no-mistakes off" ] || fail "+team-review leaked into the default mode/yolo output or warned (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review beforeproj 2>/dev/null)
+  [ "$out" = on ] || fail "a +team-review before the mode was not resolved (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" beforeproj 2>&1)
+  [ "$out" = "direct-PR on" ] || fail "a leading +team-review was mistaken for the mode (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --branch-prefix beforeproj 2>/dev/null)
+  [ "$out" = "fix/" ] || fail "+team-review disturbed the branch prefix (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --raw conditionalproj 2>/dev/null)
+  [ "$out" = "no-mistakes-prod-only off" ] || fail "+team-review disturbed a conditional policy (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review conditionalproj 2>/dev/null)
+  [ "$out" = on ] || fail "+team-review on a conditional policy was not resolved (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review never-registered 2>/dev/null)
+  [ "$out" = off ] || fail "an unregistered project must not require team review (got '$out')"
+  out=$(FM_HOME="$TMP_ROOT/project-mode-team-review/no-registry-home" "$PROJECT_MODE" --team-review anyproj 2>/dev/null)
+  [ "$out" = off ] || fail "an absent registry must not require team review (got '$out')"
+  pass "fm-project-mode: +team-review resolves order-independently through --team-review only"
+}
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
@@ -1637,4 +1674,5 @@ test_spawn_refuses_a_registry_forge_it_cannot_read
 test_promotion_carries_the_forge_binding
 test_spawn_and_promote_require_filled_task_subsections
 test_project_mode_resolves_branch_prefix
+test_project_mode_resolves_team_review
 echo "# all fm-task-delivery tests passed"

@@ -2812,6 +2812,40 @@ test_no_run_idle_pane_paused() {
   pass "no run + idle pane on a paused: status reports state: paused with its reason"
 }
 
+# A PR recorded in team review (bin/fm-pr-check.sh --team-review) reads as in
+# team review on every state line, distinct from a PR ready and waiting on a
+# merge decision, and as a declared wait while its pause is the latest event.
+test_team_review_pr_reads_as_in_team_review() {
+  reset_fakes
+  local d url out
+  d=$(new_case team-review)
+  url=https://github.com/o/r/pull/5
+  make_repo_on_branch "$d/wt" fm/feat-review
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-review.meta" "window=fm:fm-feat-review" "worktree=$d/wt" "kind=ship" \
+    "harness=claude" "mode=no-mistakes" "pr=$url" "pr_head=5555555555555555555555555555555555555555"
+  printf 'done: PR %s checks green\n' "$url" > "$d/state/feat-review.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-review
+  out=$(run_crew_state "$d" feat-review)
+  assert_contains "$out" "state: done" "a ready PR reads done before team review"
+  case "$out" in *"team review"*) fail "a PR with no team review record mentioned team review: $out" ;; esac
+
+  FM_STATE_OVERRIDE="$d/state" "$ROOT/bin/fm-pr-check.sh" --team-review in-review feat-review >/dev/null \
+    || fail "could not record team review"
+  out=$(run_crew_state "$d" feat-review)
+  assert_contains "$out" "state: paused" "a PR in team review is a declared wait"
+  assert_contains "$out" "team review: in team review $url" "a PR in team review is labelled in team review"
+
+  FM_STATE_OVERRIDE="$d/state" "$ROOT/bin/fm-pr-check.sh" --team-review "done" feat-review >/dev/null \
+    || fail "could not record team review done"
+  out=$(run_crew_state "$d" feat-review)
+  assert_contains "$out" "state: done" "a PR whose team review is done is ready again"
+  assert_contains "$out" "team review: done $url" "a finished team review is labelled done"
+  pass "a PR in team review reads as in team review, and as ready once its team review is done"
+}
+
 test_secondmate_open_block_survives_unrelated_append() {
   reset_fakes
   local d out suffix gen
@@ -5591,6 +5625,7 @@ test_no_run_herdr_idle_agent_status_and_idle_record_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
+test_team_review_pr_reads_as_in_team_review
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
 test_dead_window_ignores_stale_status_log

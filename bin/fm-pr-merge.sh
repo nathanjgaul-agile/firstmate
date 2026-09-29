@@ -135,7 +135,18 @@
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
 #
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
+# A project registered +team-review (bin/fm-project-mode.sh) requires team
+# review before a PR merges into the repository's default branch: the base and
+# default branch are read live from the forge, and a PR into the default branch
+# is refused unless the task's record reads team review done for exactly this
+# URL (fm_pr_team_review_state in bin/fm-pr-lib.sh, written by
+# bin/fm-pr-check.sh --team-review). A PR into any other branch, and every PR of
+# a project without the opt-in, is unaffected and costs no extra forge read. An
+# unreadable base or default branch refuses rather than skipping the check. An
+# attended --skip-team-review, for an explicit captain instruction, merges
+# without that record; it is refused while the away-posture record exists.
+#
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--skip-team-review] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -194,6 +205,7 @@ if [ "$PROVIDER" = gerrit ]; then
 fi
 shift 2
 ATTENDED_OVERRIDE=false
+SKIP_TEAM_REVIEW=false
 ALLOW_RED=()
 ALLOW_MISSING=()
 while [ "$#" -gt 0 ]; do
@@ -204,6 +216,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --attended-override=*)
       echo "error: --attended-override takes no value" >&2
+      exit 2
+      ;;
+    --skip-team-review)
+      SKIP_TEAM_REVIEW=true
+      shift
+      ;;
+    --skip-team-review=*)
+      echo "error: --skip-team-review takes no value" >&2
       exit 2
       ;;
     --allow-red)
@@ -1089,6 +1109,59 @@ require_released_captain_hold() {
   esac
 }
 
+# The pull request's base branch and the repository's default branch, read live,
+# as "<base> <default>" on stdout. Non-zero when either cannot be read.
+read_base_and_default_branch() {
+  local base default encoded
+  case "$PROVIDER" in
+    github)
+      base=$(gh pr view "$URL" --json baseRefName --jq .baseRefName 2>/dev/null) || return 1
+      default=$(gh repo view "$PR_OWNER/$PR_REPO" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null) || return 1
+      ;;
+    gitlab)
+      base=$(GITLAB_HOST="$PR_HOST" glab mr view "$PR_NUMBER" -R "$PROJECT_URL" -F json 2>/dev/null \
+        | jq -r 'if type == "object" and (.target_branch | type == "string") then .target_branch else error("no target") end' 2>/dev/null) || return 1
+      encoded=$(printf '%s' "$PR_PATH" | jq -sRr @uri) || return 1
+      default=$(GITLAB_HOST="$PR_HOST" glab api "projects/$encoded" 2>/dev/null \
+        | jq -r 'if type == "object" and (.default_branch | type == "string") then .default_branch else error("no default") end' 2>/dev/null) || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  [ -n "$base" ] && [ -n "$default" ] || return 1
+  case "$base$default" in *[[:space:]]*) return 1 ;; esac
+  printf '%s %s\n' "$base" "$default"
+}
+
+# The registered team review requirement; the header owns the contract.
+require_team_review() {
+  local project required branches base default state
+  project=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
+  [ -n "$project" ] || return 0
+  if ! required=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" --team-review "${project##*/}" 2>/dev/null); then
+    echo "error: could not read whether project ${project##*/} requires team review; refusing to merge" >&2
+    return 1
+  fi
+  [ "$required" = on ] || return 0
+  if ! branches=$(read_base_and_default_branch); then
+    echo "error: project ${project##*/} requires team review into its default branch, but the base or default branch of $URL could not be read; refusing to merge" >&2
+    return 1
+  fi
+  base=${branches%% *}
+  default=${branches#* }
+  [ "$base" = "$default" ] || return 0
+  state=$(fm_pr_team_review_state "$META")
+  [ "$state" != "done" ] || return 0
+  if [ "$SKIP_TEAM_REVIEW" = true ]; then
+    printf 'note: merging %s into %s without a recorded team review, on an explicit --skip-team-review\n' "$URL" "$default" >&2
+    return 0
+  fi
+  case "$state" in
+    in-review) echo "error: $URL is still in team review; project ${project##*/} requires team review before a PR merges into its default branch $default - record it done with bin/fm-pr-check.sh --team-review done $ID, or pass --skip-team-review on an explicit captain instruction" >&2 ;;
+    *) echo "error: $URL has no recorded team review; project ${project##*/} requires team review before a PR merges into its default branch $default - record it with bin/fm-pr-check.sh --team-review in-review|done $ID, or pass --skip-team-review on an explicit captain instruction" >&2 ;;
+  esac
+  return 1
+}
+
 FM_PR_MERGE_AUTHORITY=
 # The authority read. bin/fm-merge-authority-lib.sh owns what the away-posture
 # record's presence means; this function owns what a merge run may do about it,
@@ -1139,6 +1212,10 @@ require_current_away_authority() {
   fi
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
     echo "error: --allow-missing is attended-only; while the away-posture record exists every required check must report" >&2
+    return 2
+  fi
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$SKIP_TEAM_REVIEW" = true ]; then
+    echo "error: --skip-team-review is attended-only; while the away-posture record exists a registered team review requirement is absolute" >&2
     return 2
   fi
 }
@@ -1335,6 +1412,7 @@ require_current_away_authority || away_status=$?
 require_recorded_pr_identity || exit 1
 record_pr_metadata || exit 1
 require_released_captain_hold || exit 1
+require_team_review || exit 1
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
 # oversight: if this lock-owning shell dies while its gh or glab child lives,

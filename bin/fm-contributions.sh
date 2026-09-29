@@ -29,6 +29,9 @@
 # triage its signal. Formal reviews carry GitHub's own commit_id. Neither kind
 # can grant merge authority. Captain-actor prose requires an existing live hold;
 # an eligible merge remains a captain call, never an automatic forge action.
+# A task PR recorded in team review (bin/fm-pr-check.sh --team-review) is out
+# with the project's human reviewers, so it projects as maintainer-owned "in
+# team review" rather than as a captain merge-approval row until it is done.
 #
 # poll consumes fm-fleet-snapshot.sh --contribution-input, a local-only read,
 # and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 20,

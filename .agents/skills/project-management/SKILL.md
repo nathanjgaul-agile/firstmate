@@ -53,6 +53,9 @@ The optional `+yolo` posture changes merge authority only and does not change th
 Default it off for every project and every posture, and enable it only on the captain's explicit instruction.
 `AGENTS.md` section 7 owns the merge-authority contract.
 
+The optional `+team-review` token requires a recorded team review before a PR merges into the project's default branch, whatever the merge authority.
+Enable it only on the captain's explicit instruction; `bin/fm-pr-merge.sh`'s header owns the gate and its attended override.
+
 The optional `forge=` token records which forge the project's remote actually is; its one value is `forge=gerrit`.
 It is orthogonal to the mode and to `+yolo`, so it is never derived from either, and it is never inferred at use time from a remote name, host, port, or push target.
 At add or create intake, run `bin/fm-forge-detect.sh projects/<name>` once the clone exists and propose its answer alongside the posture; the captain's confirmation is what binds it, and the registry token is the durable record of that confirmation.

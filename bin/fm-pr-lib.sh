@@ -276,6 +276,31 @@ fm_pr_json_draft_state() {  # <pull-request-json>
   ' 2>/dev/null || true
 }
 
+# The one reading of a task's team-review record: whether its recorded PR is
+# out with the project's human reviewers. bin/fm-pr-check.sh --team-review
+# writes team_review=<in-review|done> together with team_review_pr=<url>, and
+# the record applies only while that URL is still the task's recorded pr=, so a
+# task that moves on to another PR starts that PR with no team review. Prints
+# in-review, done, or none. bin/fm-crew-state.sh and bin/fm-fleet-snapshot.sh
+# report it, and bin/fm-pr-merge.sh requires done where a project opts in.
+fm_pr_team_review_state() {  # <meta>
+  local meta=$1 line pr='' state='' bound=''
+  [ -f "$meta" ] && [ -r "$meta" ] || { printf 'none\n'; return 0; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      pr=*) pr=${line#pr=} ;;
+      team_review=*) state=${line#team_review=} ;;
+      team_review_pr=*) bound=${line#team_review_pr=} ;;
+    esac
+  done < "$meta"
+  if [ -n "$pr" ] && [ "$bound" = "$pr" ]; then
+    case "$state" in
+      in-review|done) printf '%s\n' "$state"; return 0 ;;
+    esac
+  fi
+  printf 'none\n'
+}
+
 fm_pr_file_mode() {
   if [ "$(uname)" = Darwin ]; then
     /usr/bin/stat -f %Lp "$1" 2>/dev/null

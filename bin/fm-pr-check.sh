@@ -17,7 +17,25 @@
 # draft state does not refuse, matching how the head read below is optional.
 # bin/fm-pr-merge.sh records through this script with FM_PR_CHECK_MERGE=1 and
 # skips this refusal, because its own merge-time draft refusal is authoritative.
+#
+# --team-review records whether the task's already-recorded PR is out with the
+# project's human reviewers, as team_review=<in-review|done> bound to that URL by
+# team_review_pr=<url> (bin/fm-pr-lib.sh's fm_pr_team_review_state owns the read).
+# It never touches the merge poll, so a merge during team review is still seen.
+#   in-review  record the PR as in team review and declare the task's wait with
+#              `paused [key=team-review]: PR <url> in team review`, so an idle
+#              worker takes the declared-wait cadence rather than stall alerts.
+#              Run it again after the worker delivers a new round; it re-declares
+#              the wait whenever that pause is no longer the task's declared wait.
+#   done       record team review as finished; this is the evidence
+#              bin/fm-pr-merge.sh requires on a project registered +team-review.
+#   clear      remove the record, as though team review never started.
+# done and clear end the declared wait, when it is still the task's current one,
+# with `done [key=team-review]: PR <url> ...`, so the task reads as ready again.
+# Status lines go through the self-announced append (bin/fm-wake-lib.sh), so they
+# do not wake the session that wrote them.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
+#        fm-pr-check.sh --team-review <in-review|done|clear> <task-id>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +51,85 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+
+team_review_command() {  # <in-review|done|clear> <task-id>
+  local action=$1 id=$2 meta url kind lock tmp line wait note written rc=0
+  case "$action" in
+    in-review|done|clear) ;;
+    *) echo "error: --team-review takes in-review, done, or clear" >&2; return 2 ;;
+  esac
+  fm_pr_task_id_valid "$id" || { echo "error: invalid PR check request" >&2; return 2; }
+  meta="$STATE/$id.meta"
+  if [ ! -f "$meta" ] || [ -L "$meta" ] || [ "$(fm_pr_file_link_count "$meta")" != 1 ]; then
+    echo "error: task metadata is unavailable" >&2
+    return 1
+  fi
+  kind=$(grep '^kind=' "$meta" | tail -1 | cut -d= -f2- || true)
+  if [ "$kind" = secondmate ]; then
+    echo "error: $id is a secondmate, not a delivery lane; record team review on the task in the mate's own home" >&2
+    return 1
+  fi
+  url=$(grep '^pr=' "$meta" | tail -1 | cut -d= -f2- || true)
+  if [ -z "$url" ]; then
+    echo "error: $id has no recorded PR; record it with fm-pr-check.sh $id <pr-url> first" >&2
+    return 1
+  fi
+
+  lock=$(fm_meta_lock_path "$meta") || return 1
+  fm_lock_acquire_wait "$lock" || return 1
+  tmp=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$lock" || true; return 1; }
+  # The record goes ahead of pr=: fm_pr_metadata_identity_parse refuses any
+  # unrecognized key after it, and that refusal would disarm the merge poll.
+  written=0
+  [ "$action" != clear ] || written=1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      team_review=*|team_review_pr=*) continue ;;
+      pr=*)
+        if [ "$written" -eq 0 ]; then
+          printf 'team_review=%s\nteam_review_pr=%s\n' "$action" "$url" >> "$tmp" || rc=1
+          written=1
+        fi
+        ;;
+    esac
+    printf '%s\n' "$line" >> "$tmp" || rc=1
+  done < "$meta"
+  [ "$rc" -eq 0 ] && chmod 0600 "$tmp" && mv -f -- "$tmp" "$meta" || rc=1
+  [ "$rc" -eq 0 ] || rm -f -- "$tmp"
+  fm_lock_release "$lock" || true
+  [ "$rc" -eq 0 ] || { echo "error: could not record team review for $id" >&2; return 1; }
+
+  # Only this command's own pause is ever declared or ended here: a worker that
+  # has moved on since keeps whatever its own latest event says.
+  wait=$(status_declared_wait_line "$STATE/$id.status")
+  note=
+  if [ "$action" = in-review ]; then
+    if ! status_is_paused "$wait" || [ "$(_fm_decision_key "$wait" 2>/dev/null || true)" != team-review ]; then
+      note="paused [key=team-review]: PR $url in team review"
+    fi
+  elif status_is_paused "$wait" && [ "$(_fm_decision_key "$wait" 2>/dev/null || true)" = team-review ]; then
+    case "$action" in
+      done) note="done [key=team-review]: PR $url team review done" ;;
+      clear) note="done [key=team-review]: PR $url team review record cleared" ;;
+    esac
+  fi
+  if [ -n "$note" ]; then
+    rc=0
+    fm_wake_status_append_self_announced "$STATE" "$STATE/$id.status" "$note" || rc=$?
+    [ "$rc" -ne 2 ] || { echo "error: recorded team review for $id but could not append its status line" >&2; return 1; }
+  fi
+  case "$action" in
+    in-review) printf 'team review: %s in team review\n' "$url" ;;
+    done) printf 'team review: %s team review done\n' "$url" ;;
+    clear) printf 'team review: %s record cleared\n' "$url" ;;
+  esac
+}
+
+if [ "${1:-}" = --team-review ]; then
+  [ "$#" -eq 3 ] || { echo "usage: fm-pr-check.sh --team-review <in-review|done|clear> <task-id>" >&2; exit 2; }
+  team_review_command "$2" "$3"
+  exit $?
+fi
 
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
