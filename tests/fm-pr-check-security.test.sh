@@ -3439,6 +3439,196 @@ SH
   pass "device re-record publication waits without rewriting its registration"
 }
 
+# The artifacts of a task's merge poll, without its metadata, which the
+# team-review record is expected to change.
+poll_only_snapshot() {  # <state> <id>
+  poll_artifact_snapshot "$1" "$2" | grep -v '^file meta '
+}
+
+# Run fm-pr-check.sh against this case's forge stub, which reports
+# FM_TEST_GH_HEAD as the PR head.
+run_pr_check_stubbed() {  # <dir> <args...>
+  local dir=$1
+  shift
+  PATH="$dir/fakebin:$BASE_PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/root" \
+    FM_TEST_GUARD_LOG="$dir/guard.log" FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" "$PR_CHECK" "$@"
+}
+
+# --team-review changes only the task's own records: the merge poll armed for
+# the PR stays byte-for-byte, and a merge during team review is still seen.
+test_team_review_keeps_the_merge_poll_armed() {
+  local dir state url before rc out
+  dir=$(make_case team-review-poll)
+  state="$dir/home/state"
+  url=https://github.com/o/r/pull/31
+  write_poll_meta "$state" task-a "$url" kind=ship mode=no-mistakes
+  printf 'done: PR %s checks green\n' "$url" > "$state/task-a.status"
+  seed_canonical_poll "$dir" task-a "$url"
+  before=$(poll_only_snapshot "$state" task-a)
+
+  out=$(run_pr_check_stubbed "$dir" --team-review in-review task-a) \
+    || fail "team review could not be recorded on a recorded PR"
+  assert_contains "$out" "$url in team review" "the in-review record did not name the PR"
+  [ "$(poll_only_snapshot "$state" task-a)" = "$before" ] || fail "recording team review changed the merge poll"
+  grep -qx "team_review=in-review" "$state/task-a.meta" || fail "team_review=in-review was not recorded"
+  grep -qxF "team_review_pr=$url" "$state/task-a.meta" || fail "team review was not bound to the recorded PR"
+  grep -qxF "pr=$url" "$state/task-a.meta" || fail "recording team review lost the recorded PR"
+  tail -1 "$state/task-a.status" | grep -q '^paused \[key=team-review\].*: PR https://github.com/o/r/pull/31 in team review$' \
+    || fail "recording team review did not declare the task's wait"
+
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "watcher failed on a merge during team review: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in
+    check:*task-a.check.sh:*merged) ;;
+    *) fail "a merge during team review was not detected: $(cat "$dir/watch.out")" ;;
+  esac
+  pass "recording team review leaves the merge poll armed, and a merge during team review is still detected"
+}
+
+# The record lifecycle through the command itself: a repeated in-review declares
+# the wait once, done records the reviewed head and ends only the command's own
+# pause, and in-review and done overwrite each other.
+test_team_review_record_lifecycle() {
+  local dir state url head=1111111111111111111111111111111111111111
+  dir=$(make_case team-review-lifecycle)
+  state="$dir/home/state"
+  url=https://github.com/o/r/pull/32
+  write_poll_meta "$state" task-a "$url" kind=ship mode=direct-PR
+  printf 'done: PR %s\n' "$url" > "$state/task-a.status"
+
+  run_pr_check_stubbed "$dir" --team-review in-review task-a >/dev/null || fail "first in-review failed"
+  run_pr_check_stubbed "$dir" --team-review in-review task-a >/dev/null || fail "repeated in-review failed"
+  [ "$(grep -c 'key=team-review' "$state/task-a.status")" -eq 1 ] || fail "a repeated in-review declared the wait twice"
+  [ "$(grep -c '^team_review=' "$state/task-a.meta")" -eq 1 ] || fail "a repeated in-review duplicated its record"
+
+  FM_TEST_GH_HEAD=$head run_pr_check_stubbed "$dir" --team-review "done" task-a >/dev/null || fail "done failed"
+  grep -qx 'team_review=done' "$state/task-a.meta" || fail "team_review=done was not recorded"
+  grep -qx "team_review_head=$head" "$state/task-a.meta" || fail "done did not record the reviewed head"
+  tail -1 "$state/task-a.status" | grep -q "^done \[key=team-review\].*: PR $url team review done$" \
+    || fail "done did not end the declared wait with a ready line: $(tail -1 "$state/task-a.status")"
+
+  run_pr_check_stubbed "$dir" --team-review in-review task-a >/dev/null || fail "in-review after done failed"
+  grep -qx 'team_review=in-review' "$state/task-a.meta" || fail "in-review did not overwrite a done record"
+  ! grep -q '^team_review_head=' "$state/task-a.meta" || fail "in-review kept the reviewed head of the done record"
+  pass "team review records declare the wait once, record the reviewed head, and overwrite each other"
+}
+
+# A push after team review returns the PR to in-review: recording the PR at its
+# new head turns the done record back and declares the wait again.
+test_team_review_done_returns_to_review_on_a_new_head() {
+  local dir state url old=2222222222222222222222222222222222222222 new=3333333333333333333333333333333333333333
+  dir=$(make_case team-review-new-head)
+  state="$dir/home/state"
+  url=https://github.com/o/r/pull/35
+  write_poll_meta "$state" task-a "$url" kind=ship mode=direct-PR
+  printf 'done: PR %s\n' "$url" > "$state/task-a.status"
+  FM_TEST_GH_HEAD=$old run_pr_check_stubbed "$dir" task-a "$url" >/dev/null || fail "could not record the PR at its first head"
+  FM_TEST_GH_HEAD=$old run_pr_check_stubbed "$dir" --team-review "done" task-a >/dev/null || fail "could not record team review done"
+  printf 'done: PR %s\n' "$url" >> "$state/task-a.status"
+
+  FM_TEST_GH_HEAD=$new run_pr_check_stubbed "$dir" task-a "$url" >/dev/null 2> "$dir/rerecord.err" \
+    || fail "recording the PR at its new head failed: $(cat "$dir/rerecord.err")"
+  grep -qx 'team_review=in-review' "$state/task-a.meta" || fail "a new head did not return the PR to in-review"
+  grep -qx "pr_head=$new" "$state/task-a.meta" || fail "the new head was not recorded"
+  tail -1 "$state/task-a.status" | grep -q '^paused \[key=team-review\]' \
+    || fail "a new head did not declare the team review wait again: $(tail -1 "$state/task-a.status")"
+  assert_grep 'has new commits since its team review' "$dir/rerecord.err" "the return to team review was not announced"
+
+  # Re-recording at the reviewed head leaves a done record alone.
+  FM_TEST_GH_HEAD=$new run_pr_check_stubbed "$dir" --team-review "done" task-a >/dev/null || fail "could not record done at the new head"
+  FM_TEST_GH_HEAD=$new run_pr_check_stubbed "$dir" task-a "$url" >/dev/null 2>&1 || fail "re-recording at the reviewed head failed"
+  grep -qx 'team_review=done' "$state/task-a.meta" || fail "re-recording at the reviewed head undid its team review"
+  pass "a push after team review returns the PR to in team review until done is recorded for the new head"
+}
+
+test_team_review_refusals_change_nothing() {
+  local dir state before rc
+  dir=$(make_case team-review-refusals)
+  state="$dir/home/state"
+  fm_write_meta "$state/no-pr.meta" window=fm-no-pr kind=ship
+  write_poll_meta "$state" mate https://github.com/o/r/pull/33 kind=secondmate
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/34 kind=ship
+  before=$(state_snapshot "$state")
+
+  set +e
+  run_pr_check_stubbed "$dir" --team-review in-review no-pr > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a task with no recorded PR must refuse team review"
+  assert_grep 'has no recorded PR' "$dir/err" "the no-PR refusal did not say why"
+  set +e
+  run_pr_check_stubbed "$dir" --team-review in-review mate > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a secondmate must refuse team review"
+  for action in approved clear; do
+    set +e
+    run_pr_check_stubbed "$dir" --team-review "$action" task-a > "$dir/out" 2> "$dir/err"; rc=$?
+    set -e
+    expect_code 2 "$rc" "team review action '$action' must be a usage error"
+  done
+  set +e
+  run_pr_check_stubbed "$dir" --team-review "done" missing-task > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a task with no metadata must refuse team review"
+  # With no readable head, done cannot bind to what the team reviewed.
+  set +e
+  FM_TEST_GH_HEAD=not-a-sha run_pr_check_stubbed "$dir" --team-review "done" task-a > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "done with no readable head must refuse"
+  assert_grep 'could not be read' "$dir/err" "the unreadable-head refusal did not say why"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a refused team review changed state"
+  pass "refused team review requests change nothing"
+}
+
+# --feature classifies a task already past intake: one feature= line, replaced
+# on a re-run, ahead of pr= so the next recording of the PR still parses, and the
+# merge poll armed for the PR is left exactly as it was.
+test_feature_classification_keeps_one_line_and_the_merge_poll() {
+  local dir state url before
+  dir=$(make_case feature-classification)
+  state="$dir/home/state"
+  url=https://github.com/o/r/pull/36
+  write_poll_meta "$state" task-a "$url" kind=ship mode=no-mistakes
+  seed_canonical_poll "$dir" task-a "$url"
+  before=$(poll_only_snapshot "$state" task-a)
+
+  run_pr_check_stubbed "$dir" --feature yes task-a >/dev/null || fail "could not classify a ship task as a feature"
+  run_pr_check_stubbed "$dir" --feature no task-a >/dev/null || fail "could not reclassify the ship task"
+  [ "$(grep -c '^feature=' "$state/task-a.meta")" -eq 1 ] || fail "a repeated --feature duplicated the classification"
+  grep -qx 'feature=no' "$state/task-a.meta" || fail "a repeated --feature did not replace the classification"
+  [ "$(poll_only_snapshot "$state" task-a)" = "$before" ] || fail "recording the classification changed the merge poll"
+  fm_pr_metadata_identity_parse "$state/task-a.meta" || fail "the classification broke the PR identity record"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "the merge poll is no longer armed"
+  pass "--feature keeps one classification ahead of pr= and leaves the merge poll armed"
+}
+
+test_feature_classification_refusals_change_nothing() {
+  local dir state before rc
+  dir=$(make_case feature-refusals)
+  state="$dir/home/state"
+  write_poll_meta "$state" mate https://github.com/o/r/pull/37 kind=secondmate
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/38 kind=ship
+  before=$(state_snapshot "$state")
+  set +e
+  run_pr_check_stubbed "$dir" --feature yes mate > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a secondmate must refuse a feature classification"
+  set +e
+  run_pr_check_stubbed "$dir" --feature maybe task-a > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 2 "$rc" "an unknown feature classification must be a usage error"
+  set +e
+  run_pr_check_stubbed "$dir" --feature yes missing-task > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a task with no metadata must refuse a feature classification"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a refused feature classification changed state"
+  pass "refused feature classifications change nothing"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_gerrit_merge_watch
@@ -3484,3 +3674,9 @@ test_bootstrap_leaves_unauthenticated_checks
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
+test_team_review_keeps_the_merge_poll_armed
+test_team_review_record_lifecycle
+test_team_review_done_returns_to_review_on_a_new_head
+test_team_review_refusals_change_nothing
+test_feature_classification_keeps_one_line_and_the_merge_poll
+test_feature_classification_refusals_change_nothing

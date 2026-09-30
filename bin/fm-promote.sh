@@ -35,7 +35,10 @@
 # its value against the registry; bin/fm-project-mode.sh's header owns the
 # binding and bin/fm-dod-lib.sh owns what it changes for the worker, including
 # the refusal of a forge on local-only.
-# Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>]
+# --feature <yes|no> records the ship's intake classification as a feature or
+# not, as bin/fm-spawn.sh does; it is required when the project is registered
+# +team-review and optional elsewhere (bin/fm-spawn.sh's header owns why).
+# Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--feature <yes|no>] [--branch-prefix <prefix>]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,6 +69,7 @@ YOLO=
 BRANCH_PREFIX=fm/
 MODE_SET=0
 YOLO_SET=0
+FEATURE=
 FORGE=none
 POS=()
 want_value=
@@ -77,6 +81,7 @@ for a in "$@"; do
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
+      feature) FEATURE=$a ;;
       branch-prefix) BRANCH_PREFIX=$a ;;
     esac
     want_value=
@@ -87,6 +92,8 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    --feature) want_value=feature ;;
+    --feature=*) FEATURE=${a#--feature=}; [ -n "$FEATURE" ] || FEATURE=invalid ;;
     --branch-prefix) want_value="branch-prefix" ;;
     --branch-prefix=*) BRANCH_PREFIX=${a#--branch-prefix=} ;;
     *) POS+=("$a") ;;
@@ -112,6 +119,10 @@ esac
 case "$YOLO" in
   on|off) ;;
   *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
+esac
+case "$FEATURE" in
+  ''|yes|no) ;;
+  *) echo "error: --feature must be yes or no (got '$FEATURE')" >&2; exit 1 ;;
 esac
 # A posture this forge cannot carry is refused once the registry binding has been
 # read. Merge authority on a Gerrit forge is refused rather than quietly dropped,
@@ -194,6 +205,11 @@ if [ -n "$PROMOTE_PROJECT" ]; then
   fi
   FORGE=${PROMOTE_STANDING_FORGE:-none}
   refuse_impossible_forge_posture || exit 1
+  if [ -z "$FEATURE" ] \
+    && [ "$("$FM_ROOT/bin/fm-project-mode.sh" --team-review "$PROMOTE_PROJECT_NAME" 2>/dev/null)" = on ]; then
+    echo "error: $ID cannot promote: $PROMOTE_PROJECT_NAME is registered +team-review, so promotion requires --feature <yes|no>; classify now whether this task is a feature, since only a feature needs team review before it merges into the default branch" >&2
+    exit 1
+  fi
 fi
 # An unbound project keeps the exact wording it always had.
 PROMOTE_FORGE_WORDS=
@@ -313,11 +329,12 @@ fi
 BRIEF_REPLACEMENT=
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' "$META" > "$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^feature=' -e '^branch=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
+  [ -z "$FEATURE" ] || echo "feature=$FEATURE"
   echo "branch=$BRANCH"
 } >> "$TMP"
 if ! fm_backlog_atomic_transition publish "$TMP" "$META" "task record" "$STATE"; then

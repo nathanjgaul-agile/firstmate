@@ -871,6 +871,7 @@ task_json_lines() {
       --arg pr "$pr" \
       --arg pr_source "$pr_source" \
       --arg pr_head "$(meta_value "$meta" pr_head)" \
+      --arg team_review "$(fm_pr_team_review_state "$meta")" \
       --arg agent_alive "$agent_alive" \
       --arg observed_at "$SNAPSHOT_NOW" \
       --arg last_event_raw "$last_event_raw" \
@@ -910,7 +911,8 @@ task_json_lines() {
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
-        pr:{url:($pr | if . == "" then null else . end),source:$pr_source,head:($pr_head | if . == "" then null else . end)},
+        pr:{url:($pr | if . == "" then null else . end),source:$pr_source,head:($pr_head | if . == "" then null else . end),
+          team_review:($team_review | if . == "none" then null else . end)},
         hints:{
           pending_decision:$pending_decision,
           blocked_event:$blocked_event,
@@ -1973,8 +1975,11 @@ scout_report_lines() {
 }
 
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
+# team_review_required is the project's +team-review opt-in (bin/fm-project-mode.sh);
+# with feature and the reviewed head it lets the contributions projection
+# withhold a merge call that bin/fm-pr-merge.sh's team review gate would refuse.
 contribution_tasks_json() {
-  local meta id merge_authority
+  local meta id merge_authority project team_review_required
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] && [ ! -L "$meta" ] || continue
     id=$(basename "$meta" .meta)
@@ -1982,9 +1987,20 @@ contribution_tasks_json() {
     if fm_merge_authority_resolve "$FM_HOME" "$STATE" "$meta" "$id"; then
       merge_authority=$FM_MERGE_AUTHORITY
     fi
+    project=$(meta_value "$meta" project)
+    team_review_required=off
+    if [ -n "$project" ] && [ -n "$(meta_value "$meta" pr)" ]; then
+      team_review_required=$("$SCRIPT_DIR/fm-project-mode.sh" --team-review "${project##*/}" 2>/dev/null) || team_review_required=off
+    fi
     jq -n --arg id "$id" --arg kind "$(meta_value "$meta" kind)" \
       --arg url "$(meta_value "$meta" pr)" --arg head "$(meta_value "$meta" pr_head)" \
-      --arg merge_authority "$merge_authority" '{id:$id,kind:$kind,pr:{url:$url,head:$head},merge_authority:$merge_authority}'
+      --arg merge_authority "$merge_authority" --arg team_review "$(fm_pr_team_review_state "$meta")" \
+      --arg team_review_head "$(fm_pr_team_review_head "$meta")" --arg feature "$(meta_value "$meta" feature)" \
+      --arg team_review_required "$team_review_required" \
+      '{id:$id,kind:$kind,pr:{url:$url,head:$head,team_review:($team_review | if . == "none" then null else . end),
+          team_review_head:($team_review_head | if . == "" then null else . end)},
+        feature:($feature | if . == "" then null else . end),team_review_required:($team_review_required == "on"),
+        merge_authority:$merge_authority}'
   done | jq -s .
 }
 

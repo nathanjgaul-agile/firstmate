@@ -16,7 +16,12 @@
 # is green at the exact current head commit, where github_checks_not_green below
 # owns what makes a check green and judges each one by its current run, and
 # every unwaived check the forge requires for the base branch has reported at
-# that head. A required check that never reported is absent from the checks
+# that head. When mergeable is the only failing condition and reads UNKNOWN,
+# meaning GitHub has not finished recomputing it, the caller re-reads and
+# re-checks every condition after a short bounded wait instead of refusing;
+# once that bound is spent it reports mergeability still pending rather than
+# unmergeable, with the same nonzero exit as any other refusal.
+# A required check that never reported is absent from the checks
 # list rather than red, so github_read_required_contexts below reads the
 # required set from classic branch protection and active rulesets. Check-run
 # requirements retain their producer app binding: a same-named check run from another app cannot
@@ -95,7 +100,9 @@
 # serializes the captain-hold check through the forge command. A still-held or
 # unreadable row refuses before that command, so a captain approval must be
 # recorded as an `answer --release` before this entrypoint is invoked. While
-# state/.afk-contract exists any green merge may proceed under away authority:
+# an away record exists (a quiet-mode record is a present captain, so its
+# merges stay attended: bin/fm-afk-contract.sh mode) any green merge may
+# proceed under away authority:
 # the record's presence is the whole mechanical fact, and which merge the
 # captain's away words meant is the supervision session's reading
 # (bin/fm-branch-prompt.sh "Postures"). An unreadable record refuses rather
@@ -116,14 +123,32 @@
 # Extra args must not include --repo or -R in any form, including a bundled
 # short-option cluster such as -yR, because the repository comes only from the
 # URL, nor --sha or --match-head-commit because the head comes only from the
-# live read. An existing task-meta pr= must equal the requested canonical URL;
-# a task cannot be rebound here. Auto-merge (--auto), a protection bypass
+# live read. An existing task-meta pr= must equal the requested canonical URL,
+# unless that bound PR has already merged - proven by its recorded merge
+# notification - in which case the task's next PR is accepted so several PRs
+# from one task can each merge in turn; while the bound PR is still unmerged a
+# different URL is refused. Auto-merge (--auto), a protection bypass
 # (--admin), and branch
 # deletion (--delete-branch, -d and short-flag clusters, and GitLab's
 # --remove-source-branch) are refused by default; --attended-override, parsed
 # before the optional -- separator, re-enables those forge flags for an
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
+#
+# A project registered +team-review (bin/fm-project-mode.sh) requires team
+# review before a feature merges into the repository's default branch. The base
+# and default branch are read live from the forge; for a PR into the default
+# branch the task's classification (feature=yes|no, recorded at intake by
+# bin/fm-spawn.sh or bin/fm-promote.sh --feature, or later by bin/fm-pr-check.sh
+# --feature) decides, and a missing one refuses. A feature is refused unless its record reads team review done
+# (fm_pr_team_review_state in bin/fm-pr-lib.sh, written by bin/fm-pr-check.sh
+# --team-review), and after the live pre-merge verify the head it binds the
+# merge to must be exactly the head that record approved, so commits pushed
+# after the review are never merged on its strength. Recording
+# `--team-review done` for the current head is the only way to satisfy it. A
+# non-feature, a PR into any other branch, and every PR of a project without the
+# opt-in are unaffected and cost no extra forge read. An unreadable base or
+# default branch refuses rather than skipping the check.
 #
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 #
@@ -705,10 +730,12 @@ github_required_checks_missing() {
 }
 
 # Pre-merge conditions from a live PR view, base requirements, and head producers.
-# Sets FM_PR_MERGE_HEAD to the verified head on success.
+# Sets FM_PR_MERGE_HEAD to the verified head on success. Returns 3, rather than
+# the usual 1, when mergeable=UNKNOWN is the only failing condition, so the
+# caller can retry a still-computing mergeability read instead of refusing.
 github_verify_mergeable() {
   local json fields line red name covered missing unreported producers runs
-  local total=0 named=0 refusals=''
+  local total=0 named=0 refusals='' mergeable_refusal=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
 
   if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup 2>/dev/null) \
@@ -769,7 +796,7 @@ FIELDS
     || refusals="$refusals  - the pull request is a draft
 "
   [ "$mergeable" = MERGEABLE ] \
-    || refusals="$refusals  - mergeable is \"${mergeable:-unreadable}\", not MERGEABLE
+    || mergeable_refusal="  - mergeable is \"${mergeable:-unreadable}\", not MERGEABLE
 "
   [ "$merge_state" != DIRTY ] \
     || refusals="$refusals  - mergeStateStatus is DIRTY (conflicts)
@@ -828,6 +855,13 @@ EOF
     done <<EOF
 $missing
 EOF
+  fi
+
+  if [ -n "$mergeable_refusal" ]; then
+    if [ -z "$refusals" ] && [ "$mergeable" = UNKNOWN ]; then
+      return 3
+    fi
+    refusals="$refusals$mergeable_refusal"
   fi
 
   if [ -n "$refusals" ]; then
@@ -1070,6 +1104,81 @@ require_released_captain_hold() {
   esac
 }
 
+# The pull request's base branch and the repository's default branch, read live,
+# as "<base> <default>" on stdout. Non-zero when either cannot be read.
+read_base_and_default_branch() {
+  local base default encoded
+  case "$PROVIDER" in
+    github)
+      base=$(gh pr view "$URL" --json baseRefName --jq .baseRefName 2>/dev/null) || return 1
+      default=$(gh repo view "$PR_OWNER/$PR_REPO" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null) || return 1
+      ;;
+    gitlab)
+      base=$(GITLAB_HOST="$PR_HOST" glab mr view "$PR_NUMBER" -R "$PROJECT_URL" -F json 2>/dev/null \
+        | jq -r 'if type == "object" and (.target_branch | type == "string") then .target_branch else error("no target") end' 2>/dev/null) || return 1
+      encoded=$(printf '%s' "$PR_PATH" | jq -sRr @uri) || return 1
+      default=$(GITLAB_HOST="$PR_HOST" glab api "projects/$encoded" 2>/dev/null \
+        | jq -r 'if type == "object" and (.default_branch | type == "string") then .default_branch else error("no default") end' 2>/dev/null) || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  [ -n "$base" ] && [ -n "$default" ] || return 1
+  case "$base$default" in *[[:space:]]*) return 1 ;; esac
+  printf '%s %s\n' "$base" "$default"
+}
+
+# The registered team review requirement; the header owns the contract. Sets
+# TEAM_REVIEW_HEAD to the approved head when a gated feature's record reads
+# done, for require_reviewed_head to compare after the live verify.
+TEAM_REVIEW_HEAD=
+require_team_review() {
+  local project name required branches base default feature state
+  TEAM_REVIEW_HEAD=
+  project=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
+  [ -n "$project" ] || return 0
+  name=${project##*/}
+  if ! required=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" --team-review "$name" 2>/dev/null); then
+    echo "error: could not read whether project $name requires team review; refusing to merge" >&2
+    return 1
+  fi
+  [ "$required" = on ] || return 0
+  if ! branches=$(read_base_and_default_branch); then
+    echo "error: project $name requires team review for a feature merging into its default branch, but the base or default branch of $URL could not be read; refusing to merge" >&2
+    return 1
+  fi
+  base=${branches%% *}
+  default=${branches#* }
+  [ "$base" = "$default" ] || return 0
+  feature=$(grep '^feature=' "$META" | tail -1 | cut -d= -f2- || true)
+  case "$feature" in
+    no) return 0 ;;
+    yes) ;;
+    *)
+      echo "error: project $name requires team review for a feature merging into its default branch $default, but task $ID records no feature classification; record it with bin/fm-pr-check.sh --feature <yes|no> $ID; refusing to merge" >&2
+      return 1
+      ;;
+  esac
+  state=$(fm_pr_team_review_state "$META")
+  if [ "$state" = "done" ]; then
+    TEAM_REVIEW_HEAD=$(fm_pr_team_review_head "$META")
+    [ -z "$TEAM_REVIEW_HEAD" ] || return 0
+  fi
+  case "$state" in
+    in-review) echo "error: $URL is in team review; project $name requires team review before a feature merges into its default branch $default - record it done for the reviewed head with bin/fm-pr-check.sh --team-review done $ID" >&2 ;;
+    *) echo "error: $URL has no recorded team review; project $name requires team review before a feature merges into its default branch $default - record it with bin/fm-pr-check.sh --team-review in-review $ID, then --team-review done $ID once the team has reviewed it" >&2 ;;
+  esac
+  return 1
+}
+
+# After the live verify: the head the merge is bound to must be the head the
+# team review approved.
+require_reviewed_head() {
+  [ -n "$TEAM_REVIEW_HEAD" ] || return 0
+  [ "$TEAM_REVIEW_HEAD" = "$FM_PR_MERGE_HEAD" ] && return 0
+  echo "error: team review of $URL was recorded at $TEAM_REVIEW_HEAD, but its head is now $FM_PR_MERGE_HEAD; the new commits have not been team reviewed - record --team-review done $ID again once the team has reviewed them" >&2
+  return 1
+}
+
 FM_PR_MERGE_AUTHORITY=
 # The authority read. bin/fm-merge-authority-lib.sh owns what the away-posture
 # record's presence means; this function owns what a merge run may do about it,
@@ -1100,7 +1209,7 @@ hold_away_record_for_merge() {
 
 require_current_away_authority() {
   FM_PR_AWAY_POSTURE=false
-  if fm_afk_contract_present "$STATE"; then
+  if fm_afk_contract_away_present "$STATE"; then
     FM_PR_AWAY_POSTURE=true
     if [ "$PROVIDER" = github ] && [ "$FM_PR_GITHUB_AUTO_REQUESTED" = true ]; then
       echo "error: --auto is attended-only; while the away-posture record exists only a synchronous merge may run under its authority lock" >&2
@@ -1168,6 +1277,13 @@ require_recorded_pr_identity() {
   existing=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
   [ -n "$existing" ] || return 0
   [ "$existing" = "$URL" ] && return 0
+  # Parsed in a subshell so FM_PR_* stays the new URL's identity for every
+  # caller after this gate; only the already-notified verdict escapes.
+  if ( fm_pr_url_parse "$existing" \
+    && fm_pr_poll_merge_already_notified "$STATE" "$ID" \
+      "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ); then
+    return 0
+  fi
   echo "error: task $ID is bound to $existing, not $URL" >&2
   return 1
 }
@@ -1309,6 +1425,7 @@ require_current_away_authority || away_status=$?
 require_recorded_pr_identity || exit 1
 record_pr_metadata || exit 1
 require_released_captain_hold || exit 1
+require_team_review || exit 1
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
 # oversight: if this lock-owning shell dies while its gh or glab child lives,
@@ -1322,7 +1439,36 @@ case "$PROVIDER" in
       merge_args=(--squash)
     fi
     FM_PR_GITHUB_CALLER_METHOD=$(caller_merge_method "$@")
-    github_verify_mergeable || exit 1
+    # mergeable reads UNKNOWN for a short while after a push or base-branch
+    # change while GitHub recomputes it; retry a bounded number of times,
+    # re-reading and re-checking every live condition on each attempt, rather
+    # than refusing a pull request that is simply still being computed. The
+    # delay is capped at 0-10 seconds so the wait stays short under the lock.
+    mergeable_retry_delay=${FM_PR_GITHUB_MERGEABLE_RETRY_DELAY:-3}
+    case "$mergeable_retry_delay" in
+      [0-9] | 10) ;;
+      *) mergeable_retry_delay=3 ;;
+    esac
+    mergeable_attempt=1
+    while :; do
+      mergeable_status=0
+      github_verify_mergeable || mergeable_status=$?
+      if [ "$mergeable_status" -eq 0 ]; then
+        break
+      fi
+      if [ "$mergeable_status" -ne 3 ] || [ "$mergeable_attempt" -ge 5 ]; then
+        break
+      fi
+      sleep "$mergeable_retry_delay"
+      mergeable_attempt=$((mergeable_attempt + 1))
+    done
+    if [ "$mergeable_status" -ne 0 ]; then
+      if [ "$mergeable_status" -eq 3 ]; then
+        printf 'error: mergeability for %s is still being computed by GitHub; retry shortly\n' "$URL" >&2
+      fi
+      exit 1
+    fi
+    require_reviewed_head || exit 1
     # The away record is locked first, so this last presence and authority read
     # and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1
@@ -1374,6 +1520,7 @@ case "$PROVIDER" in
     ;;
   gitlab)
     gitlab_verify_mergeable || exit 1
+    require_reviewed_head || exit 1
     # --sha binds the merge to the head this run verified, so a push that lands
     # in between is refused by GitLab instead of merged unverified. --yes only
     # skips the interactive confirmation, which no supervised run can answer;

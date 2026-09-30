@@ -1612,6 +1612,95 @@ EOF
   pass "fm-project-mode: --branch-prefix resolves order-independently and defaults to the legacy fm/ prefix"
 }
 
+# +team-review is an order-independent opt-in read only through --team-review:
+# it never becomes the mode, never changes the default "<mode> <yolo>" output,
+# and a project without it, an unregistered one, or an absent registry is off.
+test_project_mode_resolves_team_review() {
+  local home out
+  home="$TMP_ROOT/project-mode-team-review/home"
+  mkdir -p "$home/data"
+  cat > "$home/data/projects.md" <<'EOF'
+- plainproj - fixture with no annotation (added 2026-01-01)
+- afterproj [no-mistakes +team-review] - fixture with the opt-in after the mode (added 2026-01-01)
+- beforeproj [+team-review direct-PR +yolo branch=fix/] - fixture with the opt-in first (added 2026-01-01)
+- conditionalproj [no-mistakes-prod-only +team-review] - fixture with a conditional policy (added 2026-01-01)
+
+EOF
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review plainproj 2>/dev/null)
+  [ "$out" = off ] || fail "a project with no +team-review must not require team review (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review afterproj 2>/dev/null)
+  [ "$out" = on ] || fail "a +team-review after the mode was not resolved (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" afterproj 2>&1)
+  [ "$out" = "no-mistakes off" ] || fail "+team-review leaked into the default mode/yolo output or warned (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review beforeproj 2>/dev/null)
+  [ "$out" = on ] || fail "a +team-review before the mode was not resolved (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" beforeproj 2>&1)
+  [ "$out" = "direct-PR on" ] || fail "a leading +team-review was mistaken for the mode (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --branch-prefix beforeproj 2>/dev/null)
+  [ "$out" = "fix/" ] || fail "+team-review disturbed the branch prefix (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --raw conditionalproj 2>/dev/null)
+  [ "$out" = "no-mistakes-prod-only off" ] || fail "+team-review disturbed a conditional policy (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review conditionalproj 2>/dev/null)
+  [ "$out" = on ] || fail "+team-review on a conditional policy was not resolved (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --team-review never-registered 2>/dev/null)
+  [ "$out" = off ] || fail "an unregistered project must not require team review (got '$out')"
+  out=$(FM_HOME="$TMP_ROOT/project-mode-team-review/no-registry-home" "$PROJECT_MODE" --team-review anyproj 2>/dev/null)
+  [ "$out" = off ] || fail "an absent registry must not require team review (got '$out')"
+  pass "fm-project-mode: +team-review resolves order-independently through --team-review only"
+}
+
+# On a +team-review project the feature classification is part of the intake
+# contract, exactly like the delivery mode: a ship spawn or promotion without it
+# refuses before anything is created, and elsewhere it stays optional.
+test_team_review_intake_requires_a_feature_classification() {
+  local rec home proj fakebin out status meta
+  rec=$(make_home feature-intake '- proj [no-mistakes +team-review] - team review fixture (added 2026-01-01)')
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_brief "$home" feature-a1 no-mistakes
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unclassified ship spawn on a +team-review project should exit non-zero"
+  assert_contains "$out" "requires --feature <yes|no>" "the spawn refusal did not name the missing classification"
+  assert_absent "$home/state/feature-a1.meta" "a refused unclassified spawn wrote task metadata"
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --mode no-mistakes --yolo off --feature maybe)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unknown feature classification should exit non-zero"
+  assert_contains "$out" "--feature must be yes or no" "the spawn did not refuse an unknown classification"
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --mode no-mistakes --yolo off --feature yes)
+  case "$out" in *"requires --feature"*) fail "a classified spawn was still refused for its classification: $out" ;; esac
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --scout --feature yes)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a scout spawn carrying --feature should exit non-zero"
+  assert_contains "$out" "--feature applies only to ship spawns" "scout spawn did not refuse --feature"
+
+  rec=$(make_home feature-optional '- proj [no-mistakes] - no team review fixture (added 2026-01-01)')
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_brief "$home" feature-b1 no-mistakes
+  out=$(run_spawn "$home" "$fakebin" feature-b1 "$proj" claude --mode no-mistakes --yolo off)
+  case "$out" in *"requires --feature"*) fail "a project without +team-review required a classification: $out" ;; esac
+
+  home="$TMP_ROOT/feature-promote/home"
+  mkdir -p "$home/state" "$home/data"
+  printf '%s\n' '- proj [no-mistakes +team-review] - team review fixture (added 2026-01-01)' > "$home/data/projects.md"
+  meta="$home/state/feature-c1.meta"
+  write_brief "$home" feature-c1
+  printf 'window=fm-feature-c1\nkind=scout\nworktree=/tmp/wt\nproject=%s/proj\n' "$TMP_ROOT/feature-promote" > "$meta"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" feature-c1 --mode direct-PR --yolo off 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unclassified promotion on a +team-review project should exit non-zero"
+  assert_contains "$out" "promotion requires --feature <yes|no>" "the promotion refusal did not name the missing classification"
+  assert_grep 'kind=scout' "$meta" "a refused unclassified promotion changed the task record"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" feature-c1 --mode direct-PR --yolo off --feature no 2>&1)
+  status=$?
+  expect_code 0 "$status" "a classified promotion should succeed: $out"
+  grep -qx 'feature=no' "$meta" || fail "promotion did not record the feature classification"
+  pass "fm-spawn and fm-promote require a feature classification on a +team-review project"
+}
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
@@ -1637,4 +1726,6 @@ test_spawn_refuses_a_registry_forge_it_cannot_read
 test_promotion_carries_the_forge_binding
 test_spawn_and_promote_require_filled_task_subsections
 test_project_mode_resolves_branch_prefix
+test_project_mode_resolves_team_review
+test_team_review_intake_requires_a_feature_classification
 echo "# all fm-task-delivery tests passed"

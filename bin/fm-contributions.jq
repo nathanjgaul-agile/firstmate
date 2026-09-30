@@ -41,10 +41,14 @@ def projected($input; $saved; $now; $max_age):
          (.id == $k.task or ((.links // []) | index($k.url)) != null))
          | select(.hold_bucket == "live")] | first) as $hold
     | ([$input.tasks[]? | select(.id == $k.task and .pr.url == $k.url)
-       | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown")}] | first) as $task
+       | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown"),
+          team_review:(.pr.team_review // null),team_review_head:(.pr.team_review_head // null),
+          feature:(.feature // null),team_review_required:(.team_review_required // false)}] | first) as $task
     | ($task.head // null) as $recorded_head
     | ($task.merge_authority // "unknown") as $merge_authority
+    | ($task.team_review // null) as $team_review
     | ($record.observation // {}) as $o
+    | (($task.team_review_required // false) and ($o.into_default != false)) as $team_review_gated
     | (if $record.error == null and $record.observation != null and ($o.head | sha) then $o.head else null end) as $observed_head
     | (($record.checked_at // "") | try fromdateiso8601 catch null) as $checked
     # A merged or closed observation is final; poll never re-reads it, so it never expires.
@@ -87,6 +91,13 @@ def projected($input; $saved; $now; $max_age):
        elif $verdict != null and $verdict.actor == "fleet" then {actor:"fleet",reason:$verdict.summary}
        elif $verdict != null and $verdict.actor == "captain" then
          {actor:"fleet",reason:"record the unresolved arbitration as a captain hold"}
+       # Out with the project's human reviewers: not yet the captain's merge call.
+       elif $team_review == "in-review" then {actor:"maintainer",reason:"in team review"}
+       elif $team_review_gated and ($task.feature // null) == null then
+         {actor:"fleet",reason:("team review requires a feature classification for this task; record it with fm-pr-check.sh --feature <yes|no> " + $k.task)}
+       elif $team_review_gated and $task.feature == "yes"
+         and ($team_review != "done" or $task.team_review_head != $observed_head) then
+         {actor:"maintainer",reason:"awaiting team review"}
        elif $o.review_decision == "REVIEW_REQUIRED" then {actor:"maintainer",reason:"review required"}
        elif $o.can_merge == true and $merge_authority == "away" then
          {actor:"fleet",reason:"checks green; merge is authorized by delivery posture"}
@@ -94,7 +105,7 @@ def projected($input; $saved; $now; $max_age):
        else {actor:"maintainer",reason:"delivery awaits the maintainer"} end) as $action
     | $k + {kind:($record.kind // (if ($k.url | contains("/issues/")) then "issue" else "pr" end)),
          checked_at:$record.checked_at,checked:$fresh,final:$final,head:($observed_head // $recorded_head // $o.head),verdict:$verdict,reviews:$reviews,
-         distinct_checks:($checks | length),missing_verdicts:(($no_verdict | length) + (($o.absent_checks // []) | length)),
+         team_review:$team_review,distinct_checks:($checks | length),missing_verdicts:(($no_verdict | length) + (($o.absent_checks // []) | length)),
          pending_checks:($pending | length),failed_checks:($failed | length),
          stale_verdicts:((if $stale then 1 else 0 end) + ([$reviews[] | select(.freshness == "STALE")] | length)),
          signals:($record.pending // [])} + $action]
