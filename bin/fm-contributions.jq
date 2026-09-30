@@ -94,7 +94,7 @@ def projected($input; $saved; $now; $max_age):
        # Out with the project's human reviewers: not yet the captain's merge call.
        elif $team_review == "in-review" then {actor:"maintainer",reason:"in team review"}
        elif $team_review_gated and ($task.feature // null) == null then
-         {actor:"fleet",reason:"team review requires a feature classification for this task"}
+         {actor:"fleet",reason:("team review requires a feature classification for this task; record it with fm-pr-check.sh --feature <yes|no> " + $k.task)}
        elif $team_review_gated and $task.feature == "yes"
          and ($team_review != "done" or $task.team_review_head != $observed_head) then
          {actor:"maintainer",reason:"awaiting team review"}

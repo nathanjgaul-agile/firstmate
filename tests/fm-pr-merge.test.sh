@@ -2497,6 +2497,36 @@ test_team_review_gate_applies_only_to_classified_features() {
   pass "fm-pr-merge gates only tasks classified as features, and refuses an unclassified default-branch merge"
 }
 
+# A task past intake with a recorded PR is classified through fm-pr-check.sh
+# --feature, which the gate then honours like an intake classification.
+record_feature() {  # <case-dir> <yes|no>
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$1/home" FM_STATE_OVERRIDE="$1/state" \
+    "$ROOT/bin/fm-pr-check.sh" --feature "$2" task-x1 >/dev/null \
+    || fail "could not record feature=$2 for $1"
+}
+
+test_team_review_gate_honours_a_later_feature_classification() {
+  local case_dir
+  case_dir=$(make_team_review_case team-review-classified-feature on -)
+  record_feature "$case_dir" yes
+  run_team_review_merge "$case_dir"
+  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-classified-feature: a feature classified later must still need team review"
+  assert_grep 'has no recorded team review' "$case_dir/stderr" "team-review-classified-feature: refusal did not name the missing team review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-classified-feature: gh pr merge ran without team review"
+  record_team_review "$case_dir" "done"
+  run_team_review_merge "$case_dir"
+  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-classified-feature: a classified feature after team review must merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 120 example/repo --squash
+
+  case_dir=$(make_team_review_case team-review-classified-non-feature on -)
+  record_feature "$case_dir" yes
+  record_feature "$case_dir" no
+  run_team_review_merge "$case_dir"
+  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-classified-non-feature: a task reclassified as no feature must merge without team review"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 120 example/repo --squash
+  pass "fm-pr-merge honours a feature classification recorded after intake with fm-pr-check.sh --feature"
+}
+
 test_team_review_gate_ignores_non_default_base_and_unregistered_projects() {
   local case_dir
   case_dir=$(make_team_review_case team-review-feature-branch on)
@@ -2571,6 +2601,7 @@ test_team_review_gate_refuses_feature_merge_until_done
 test_team_review_done_for_an_older_head_refuses
 test_team_review_done_for_another_pr_does_not_count
 test_team_review_gate_applies_only_to_classified_features
+test_team_review_gate_honours_a_later_feature_classification
 test_team_review_gate_ignores_non_default_base_and_unregistered_projects
 test_team_review_gate_refuses_an_unreadable_default_branch
 test_team_review_has_no_bypass

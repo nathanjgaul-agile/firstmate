@@ -138,9 +138,9 @@
 # A project registered +team-review (bin/fm-project-mode.sh) requires team
 # review before a feature merges into the repository's default branch. The base
 # and default branch are read live from the forge; for a PR into the default
-# branch the task's intake classification (feature=yes|no, recorded by
-# bin/fm-spawn.sh or bin/fm-promote.sh --feature) decides, and a missing one
-# refuses. A feature is refused unless its record reads team review done
+# branch the task's classification (feature=yes|no, recorded at intake by
+# bin/fm-spawn.sh or bin/fm-promote.sh --feature, or later by bin/fm-pr-check.sh
+# --feature) decides, and a missing one refuses. A feature is refused unless its record reads team review done
 # (fm_pr_team_review_state in bin/fm-pr-lib.sh, written by bin/fm-pr-check.sh
 # --team-review), and after the live pre-merge verify the head it binds the
 # merge to must be exactly the head that record approved, so commits pushed
@@ -1154,7 +1154,7 @@ require_team_review() {
     no) return 0 ;;
     yes) ;;
     *)
-      echo "error: project $name requires team review for a feature merging into its default branch $default, but task $ID records no feature classification (feature=yes|no, set at intake with fm-spawn.sh or fm-promote.sh --feature); refusing to merge" >&2
+      echo "error: project $name requires team review for a feature merging into its default branch $default, but task $ID records no feature classification; record it with bin/fm-pr-check.sh --feature <yes|no> $ID; refusing to merge" >&2
       return 1
       ;;
   esac

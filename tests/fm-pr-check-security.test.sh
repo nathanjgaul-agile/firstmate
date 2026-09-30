@@ -3584,6 +3584,51 @@ test_team_review_refusals_change_nothing() {
   pass "refused team review requests change nothing"
 }
 
+# --feature classifies a task already past intake: one feature= line, replaced
+# on a re-run, ahead of pr= so the next recording of the PR still parses, and the
+# merge poll armed for the PR is left exactly as it was.
+test_feature_classification_keeps_one_line_and_the_merge_poll() {
+  local dir state url before
+  dir=$(make_case feature-classification)
+  state="$dir/home/state"
+  url=https://github.com/o/r/pull/36
+  write_poll_meta "$state" task-a "$url" kind=ship mode=no-mistakes
+  seed_canonical_poll "$dir" task-a "$url"
+  before=$(poll_only_snapshot "$state" task-a)
+
+  run_pr_check_stubbed "$dir" --feature yes task-a >/dev/null || fail "could not classify a ship task as a feature"
+  run_pr_check_stubbed "$dir" --feature no task-a >/dev/null || fail "could not reclassify the ship task"
+  [ "$(grep -c '^feature=' "$state/task-a.meta")" -eq 1 ] || fail "a repeated --feature duplicated the classification"
+  grep -qx 'feature=no' "$state/task-a.meta" || fail "a repeated --feature did not replace the classification"
+  [ "$(poll_only_snapshot "$state" task-a)" = "$before" ] || fail "recording the classification changed the merge poll"
+  fm_pr_metadata_identity_parse "$state/task-a.meta" || fail "the classification broke the PR identity record"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "the merge poll is no longer armed"
+  pass "--feature keeps one classification ahead of pr= and leaves the merge poll armed"
+}
+
+test_feature_classification_refusals_change_nothing() {
+  local dir state before rc
+  dir=$(make_case feature-refusals)
+  state="$dir/home/state"
+  write_poll_meta "$state" mate https://github.com/o/r/pull/37 kind=secondmate
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/38 kind=ship
+  before=$(state_snapshot "$state")
+  set +e
+  run_pr_check_stubbed "$dir" --feature yes mate > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a secondmate must refuse a feature classification"
+  set +e
+  run_pr_check_stubbed "$dir" --feature maybe task-a > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 2 "$rc" "an unknown feature classification must be a usage error"
+  set +e
+  run_pr_check_stubbed "$dir" --feature yes missing-task > "$dir/out" 2> "$dir/err"; rc=$?
+  set -e
+  expect_code 1 "$rc" "a task with no metadata must refuse a feature classification"
+  [ "$(state_snapshot "$state")" = "$before" ] || fail "a refused feature classification changed state"
+  pass "refused feature classifications change nothing"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_gerrit_merge_watch
@@ -3633,3 +3678,5 @@ test_team_review_keeps_the_merge_poll_armed
 test_team_review_record_lifecycle
 test_team_review_done_returns_to_review_on_a_new_head
 test_team_review_refusals_change_nothing
+test_feature_classification_keeps_one_line_and_the_merge_poll
+test_feature_classification_refusals_change_nothing

@@ -31,8 +31,10 @@
 #   done       record team review as finished for the PR's current head, read
 #              live from the forge and otherwise taken from the recorded
 #              pr_head, as team_review_head=<sha>; with no readable head it
-#              refuses. That record is the evidence bin/fm-pr-merge.sh requires
-#              for a feature on a project registered +team-review.
+#              refuses. A recorded pr_head is updated to that head too, so a
+#              push not yet re-recorded does not leave the done record reading
+#              in team review. That record is the evidence bin/fm-pr-merge.sh
+#              requires for a feature on a project registered +team-review.
 # done ends the declared wait, when it is still the task's current one, with
 # `done [key=team-review]: PR <url> team review done`, so the task reads as ready.
 # A later ordinary recording of the same PR at a different head (a new round
@@ -40,8 +42,15 @@
 # the wait again, so team review is recorded again for what the team has not
 # seen. Status lines go through the self-announced append (bin/fm-wake-lib.sh),
 # so they do not wake the session that wrote them.
+#
+# --feature records an existing ship task's classification as a feature or not,
+# as feature=<yes|no>, for a task already past intake (bin/fm-spawn.sh and
+# bin/fm-promote.sh --feature classify at intake). It is written ahead of pr=
+# for the same reason, replaces any earlier classification, and never touches
+# the merge poll.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 #        fm-pr-check.sh --team-review <in-review|done> <task-id>
+#        fm-pr-check.sh --feature <yes|no> <task-id>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,30 +89,83 @@ team_review_current_head() {  # <meta> <url>
   printf '%s\n' "$head"
 }
 
-# Rewrite the team-review record of <meta>, ahead of its pr= line, under the
-# task's metadata lock. <head> is written only for a done record.
-team_review_write() {  # <meta> <state> <url> [<head>]
-  local meta=$1 state=$2 url=$3 head=${4:-} lock tmp line written=0 rc=0
+# Replace <meta> under the task's metadata lock with what <filter> <args...>
+# prints when given the current record on stdin.
+meta_rewrite() {  # <meta> <filter> [<args>...]
+  local meta=$1 lock tmp rc=0
+  shift
   lock=$(fm_meta_lock_path "$meta") || return 1
   fm_lock_acquire_wait "$lock" || return 1
   tmp=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$lock" || true; return 1; }
+  "$@" < "$meta" > "$tmp" && chmod 0600 "$tmp" && mv -f -- "$tmp" "$meta" || rc=1
+  [ "$rc" -eq 0 ] || rm -f -- "$tmp"
+  fm_lock_release "$lock" || true
+  return "$rc"
+}
+
+# The team-review record, ahead of the pr= line. <head> is given only for a
+# done record, which also becomes the recorded pr_head where one is recorded.
+team_review_lines() {  # <state> <url> [<head>]
+  local state=$1 url=$2 head=${3:-} line written=0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       team_review=*|team_review_pr=*|team_review_head=*) continue ;;
       pr=*)
         if [ "$written" -eq 0 ]; then
-          printf 'team_review=%s\nteam_review_pr=%s\n' "$state" "$url" >> "$tmp" || rc=1
-          [ -z "$head" ] || printf 'team_review_head=%s\n' "$head" >> "$tmp" || rc=1
+          printf 'team_review=%s\nteam_review_pr=%s\n' "$state" "$url" || return 1
+          [ -z "$head" ] || printf 'team_review_head=%s\n' "$head" || return 1
+          written=1
+        fi
+        ;;
+      pr_head=*) [ -z "$head" ] || line="pr_head=$head" ;;
+    esac
+    printf '%s\n' "$line" || return 1
+  done
+}
+
+team_review_write() {  # <meta> <state> <url> [<head>]
+  meta_rewrite "$1" team_review_lines "$2" "$3" "${4:-}"
+}
+
+# The one feature classification, ahead of the pr= line, or last when no PR is
+# recorded yet.
+feature_lines() {  # <yes|no>
+  local value=$1 line written=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      feature=*) continue ;;
+      pr=*)
+        if [ "$written" -eq 0 ]; then
+          printf 'feature=%s\n' "$value" || return 1
           written=1
         fi
         ;;
     esac
-    printf '%s\n' "$line" >> "$tmp" || rc=1
-  done < "$meta"
-  [ "$rc" -eq 0 ] && chmod 0600 "$tmp" && mv -f -- "$tmp" "$meta" || rc=1
-  [ "$rc" -eq 0 ] || rm -f -- "$tmp"
-  fm_lock_release "$lock" || true
-  return "$rc"
+    printf '%s\n' "$line" || return 1
+  done
+  [ "$written" -eq 1 ] || printf 'feature=%s\n' "$value"
+}
+
+feature_command() {  # <yes|no> <task-id>
+  local value=$1 id=$2 meta kind
+  case "$value" in
+    yes|no) ;;
+    *) echo "error: --feature takes yes or no" >&2; return 2 ;;
+  esac
+  fm_pr_task_id_valid "$id" || { echo "error: invalid PR check request" >&2; return 2; }
+  meta="$STATE/$id.meta"
+  if [ ! -f "$meta" ] || [ -L "$meta" ] || [ "$(fm_pr_file_link_count "$meta")" != 1 ]; then
+    echo "error: task metadata is unavailable" >&2
+    return 1
+  fi
+  kind=$(grep '^kind=' "$meta" | tail -1 | cut -d= -f2- || true)
+  if [ -n "$kind" ] && [ "$kind" != ship ]; then
+    echo "error: $id is a $kind, not a ship task; only a ship task carries a feature classification" >&2
+    return 1
+  fi
+  meta_rewrite "$meta" feature_lines "$value" \
+    || { echo "error: could not record the feature classification for $id" >&2; return 1; }
+  printf 'feature: %s recorded feature=%s\n' "$id" "$value"
 }
 
 # 0 when the task's declared wait is this command's own team-review pause.
@@ -170,6 +232,11 @@ team_review_command() {  # <in-review|done> <task-id>
 if [ "${1:-}" = --team-review ]; then
   [ "$#" -eq 3 ] || { echo "usage: fm-pr-check.sh --team-review <in-review|done> <task-id>" >&2; exit 2; }
   team_review_command "$2" "$3"
+  exit $?
+fi
+if [ "${1:-}" = --feature ]; then
+  [ "$#" -eq 3 ] || { echo "usage: fm-pr-check.sh --feature <yes|no> <task-id>" >&2; exit 2; }
+  feature_command "$2" "$3"
   exit $?
 fi
 
