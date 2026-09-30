@@ -20,22 +20,28 @@
 #
 # --team-review records whether the task's already-recorded PR is out with the
 # project's human reviewers, as team_review=<in-review|done> bound to that URL by
-# team_review_pr=<url> (bin/fm-pr-lib.sh's fm_pr_team_review_state owns the read).
-# It never touches the merge poll, so a merge during team review is still seen.
+# team_review_pr=<url> (bin/fm-pr-lib.sh's fm_pr_team_review_state owns the read),
+# written ahead of pr= because the metadata identity parse refuses unrecognized
+# keys after it. It never touches the merge poll, so a merge during team review
+# is still seen. The two states overwrite each other, which is also how a
+# mistaken record is corrected.
 #   in-review  record the PR as in team review and declare the task's wait with
 #              `paused [key=team-review]: PR <url> in team review`, so an idle
 #              worker takes the declared-wait cadence rather than stall alerts.
-#              Run it again after the worker delivers a new round; it re-declares
-#              the wait whenever that pause is no longer the task's declared wait.
-#   done       record team review as finished; this is the evidence
-#              bin/fm-pr-merge.sh requires on a project registered +team-review.
-#   clear      remove the record, as though team review never started.
-# done and clear end the declared wait, when it is still the task's current one,
-# with `done [key=team-review]: PR <url> ...`, so the task reads as ready again.
-# Status lines go through the self-announced append (bin/fm-wake-lib.sh), so they
-# do not wake the session that wrote them.
+#   done       record team review as finished for the PR's current head, read
+#              live from the forge and otherwise taken from the recorded
+#              pr_head, as team_review_head=<sha>; with no readable head it
+#              refuses. That record is the evidence bin/fm-pr-merge.sh requires
+#              for a feature on a project registered +team-review.
+# done ends the declared wait, when it is still the task's current one, with
+# `done [key=team-review]: PR <url> team review done`, so the task reads as ready.
+# A later ordinary recording of the same PR at a different head (a new round
+# pushed after review) turns the done record back into in-review and declares
+# the wait again, so team review is recorded again for what the team has not
+# seen. Status lines go through the self-announced append (bin/fm-wake-lib.sh),
+# so they do not wake the session that wrote them.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
-#        fm-pr-check.sh --team-review <in-review|done|clear> <task-id>
+#        fm-pr-check.sh --team-review <in-review|done> <task-id>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,11 +58,73 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 
-team_review_command() {  # <in-review|done|clear> <task-id>
-  local action=$1 id=$2 meta url kind lock tmp line wait note written rc=0
+# The PR's current head for a done record: live from the forge first, then the
+# recorded pr_head. Prints nothing when neither is readable.
+team_review_current_head() {  # <meta> <url>
+  local meta=$1 url=$2 head=''
+  if fm_pr_url_parse "$url"; then
+    case "$FM_PR_PROVIDER" in
+      github)
+        command -v gh >/dev/null 2>&1 \
+          && head=$(gh pr view "$url" --json headRefOid -q .headRefOid 2>/dev/null) || head=''
+        ;;
+      gitlab)
+        command -v glab >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
+          && head=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$FM_PR_NUMBER" -R "https://$FM_PR_HOST/$FM_PR_PATH" -F json 2>/dev/null \
+            | jq -r '.sha // empty' 2>/dev/null) || head=''
+        ;;
+    esac
+  fi
+  fm_pr_head_valid "$head" || head=$(grep '^pr_head=' "$meta" | tail -1 | cut -d= -f2- || true)
+  fm_pr_head_valid "$head" || return 0
+  printf '%s\n' "$head"
+}
+
+# Rewrite the team-review record of <meta>, ahead of its pr= line, under the
+# task's metadata lock. <head> is written only for a done record.
+team_review_write() {  # <meta> <state> <url> [<head>]
+  local meta=$1 state=$2 url=$3 head=${4:-} lock tmp line written=0 rc=0
+  lock=$(fm_meta_lock_path "$meta") || return 1
+  fm_lock_acquire_wait "$lock" || return 1
+  tmp=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$lock" || true; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      team_review=*|team_review_pr=*|team_review_head=*) continue ;;
+      pr=*)
+        if [ "$written" -eq 0 ]; then
+          printf 'team_review=%s\nteam_review_pr=%s\n' "$state" "$url" >> "$tmp" || rc=1
+          [ -z "$head" ] || printf 'team_review_head=%s\n' "$head" >> "$tmp" || rc=1
+          written=1
+        fi
+        ;;
+    esac
+    printf '%s\n' "$line" >> "$tmp" || rc=1
+  done < "$meta"
+  [ "$rc" -eq 0 ] && chmod 0600 "$tmp" && mv -f -- "$tmp" "$meta" || rc=1
+  [ "$rc" -eq 0 ] || rm -f -- "$tmp"
+  fm_lock_release "$lock" || true
+  return "$rc"
+}
+
+# 0 when the task's declared wait is this command's own team-review pause.
+team_review_pause_declared() {  # <task-id>
+  local wait
+  wait=$(status_declared_wait_line "$STATE/$1.status")
+  status_is_paused "$wait" && [ "$(_fm_decision_key "$wait" 2>/dev/null || true)" = team-review ]
+}
+
+# Append one team-review status line through the self-announced append.
+team_review_status() {  # <task-id> <line>
+  local rc=0
+  fm_wake_status_append_self_announced "$STATE" "$STATE/$1.status" "$2" || rc=$?
+  [ "$rc" -ne 2 ]
+}
+
+team_review_command() {  # <in-review|done> <task-id>
+  local action=$1 id=$2 meta url kind head=''
   case "$action" in
-    in-review|done|clear) ;;
-    *) echo "error: --team-review takes in-review, done, or clear" >&2; return 2 ;;
+    in-review|done) ;;
+    *) echo "error: --team-review takes in-review or done" >&2; return 2 ;;
   esac
   fm_pr_task_id_valid "$id" || { echo "error: invalid PR check request" >&2; return 2; }
   meta="$STATE/$id.meta"
@@ -74,59 +142,33 @@ team_review_command() {  # <in-review|done|clear> <task-id>
     echo "error: $id has no recorded PR; record it with fm-pr-check.sh $id <pr-url> first" >&2
     return 1
   fi
-
-  lock=$(fm_meta_lock_path "$meta") || return 1
-  fm_lock_acquire_wait "$lock" || return 1
-  tmp=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$lock" || true; return 1; }
-  # The record goes ahead of pr=: fm_pr_metadata_identity_parse refuses any
-  # unrecognized key after it, and that refusal would disarm the merge poll.
-  written=0
-  [ "$action" != clear ] || written=1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      team_review=*|team_review_pr=*) continue ;;
-      pr=*)
-        if [ "$written" -eq 0 ]; then
-          printf 'team_review=%s\nteam_review_pr=%s\n' "$action" "$url" >> "$tmp" || rc=1
-          written=1
-        fi
-        ;;
-    esac
-    printf '%s\n' "$line" >> "$tmp" || rc=1
-  done < "$meta"
-  [ "$rc" -eq 0 ] && chmod 0600 "$tmp" && mv -f -- "$tmp" "$meta" || rc=1
-  [ "$rc" -eq 0 ] || rm -f -- "$tmp"
-  fm_lock_release "$lock" || true
-  [ "$rc" -eq 0 ] || { echo "error: could not record team review for $id" >&2; return 1; }
+  if [ "$action" = "done" ]; then
+    head=$(team_review_current_head "$meta" "$url")
+    if [ -z "$head" ]; then
+      echo "error: the current head of $url could not be read, so team review cannot be recorded against the commits the team reviewed; retry when the forge is reachable" >&2
+      return 1
+    fi
+  fi
+  team_review_write "$meta" "$action" "$url" "$head" \
+    || { echo "error: could not record team review for $id" >&2; return 1; }
 
   # Only this command's own pause is ever declared or ended here: a worker that
   # has moved on since keeps whatever its own latest event says.
-  wait=$(status_declared_wait_line "$STATE/$id.status")
-  note=
   if [ "$action" = in-review ]; then
-    if ! status_is_paused "$wait" || [ "$(_fm_decision_key "$wait" 2>/dev/null || true)" != team-review ]; then
-      note="paused [key=team-review]: PR $url in team review"
-    fi
-  elif status_is_paused "$wait" && [ "$(_fm_decision_key "$wait" 2>/dev/null || true)" = team-review ]; then
-    case "$action" in
-      done) note="done [key=team-review]: PR $url team review done" ;;
-      clear) note="done [key=team-review]: PR $url team review record cleared" ;;
-    esac
+    team_review_pause_declared "$id" \
+      || team_review_status "$id" "paused [key=team-review]: PR $url in team review" \
+      || { echo "error: recorded team review for $id but could not append its status line" >&2; return 1; }
+    printf 'team review: %s in team review\n' "$url"
+  else
+    ! team_review_pause_declared "$id" \
+      || team_review_status "$id" "done [key=team-review]: PR $url team review done" \
+      || { echo "error: recorded team review for $id but could not append its status line" >&2; return 1; }
+    printf 'team review: %s team review done at %s\n' "$url" "$head"
   fi
-  if [ -n "$note" ]; then
-    rc=0
-    fm_wake_status_append_self_announced "$STATE" "$STATE/$id.status" "$note" || rc=$?
-    [ "$rc" -ne 2 ] || { echo "error: recorded team review for $id but could not append its status line" >&2; return 1; }
-  fi
-  case "$action" in
-    in-review) printf 'team review: %s in team review\n' "$url" ;;
-    done) printf 'team review: %s team review done\n' "$url" ;;
-    clear) printf 'team review: %s record cleared\n' "$url" ;;
-  esac
 }
 
 if [ "${1:-}" = --team-review ]; then
-  [ "$#" -eq 3 ] || { echo "usage: fm-pr-check.sh --team-review <in-review|done|clear> <task-id>" >&2; exit 2; }
+  [ "$#" -eq 3 ] || { echo "usage: fm-pr-check.sh --team-review <in-review|done> <task-id>" >&2; exit 2; }
   team_review_command "$2" "$3"
   exit $?
 fi
@@ -312,6 +354,21 @@ else
   PR_POLL_PUBLISH_LOCK_HELD=0
   echo "error: could not publish PR poll" >&2
   exit 1
+fi
+# A done team review recorded for an earlier head of this PR no longer covers
+# it: record it in team review again and declare the wait, so the new commits
+# are reviewed before a gated merge. The merge-time re-record leaves the record
+# alone, because bin/fm-pr-merge.sh compares the head it verifies itself.
+if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && [ -n "$(fm_pr_team_review_head "$META")" ] \
+  && [ "$(fm_pr_team_review_state "$META")" = in-review ]; then
+  if team_review_write "$META" in-review "$URL"; then
+    team_review_pause_declared "$ID" \
+      || team_review_status "$ID" "paused [key=team-review]: PR $URL in team review again for its new head" \
+      || printf 'actionable: %s is back in team review but its status line could not be appended\n' "$URL" >&2
+    printf 'team review: %s has new commits since its team review; recorded in team review again\n' "$URL" >&2
+  else
+    printf 'actionable: %s has new commits since its team review, but the record could not be returned to in team review\n' "$URL" >&2
+  fi
 fi
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 # The merge-time re-record is not a new review-ready PR, so it writes nothing.

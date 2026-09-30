@@ -136,17 +136,21 @@
 # away-record read, or a captain hold.
 #
 # A project registered +team-review (bin/fm-project-mode.sh) requires team
-# review before a PR merges into the repository's default branch: the base and
-# default branch are read live from the forge, and a PR into the default branch
-# is refused unless the task's record reads team review done for exactly this
-# URL (fm_pr_team_review_state in bin/fm-pr-lib.sh, written by
-# bin/fm-pr-check.sh --team-review). A PR into any other branch, and every PR of
-# a project without the opt-in, is unaffected and costs no extra forge read. An
-# unreadable base or default branch refuses rather than skipping the check. An
-# attended --skip-team-review, for an explicit captain instruction, merges
-# without that record; it is refused while the away-posture record exists.
+# review before a feature merges into the repository's default branch. The base
+# and default branch are read live from the forge; for a PR into the default
+# branch the task's intake classification (feature=yes|no, recorded by
+# bin/fm-spawn.sh or bin/fm-promote.sh --feature) decides, and a missing one
+# refuses. A feature is refused unless its record reads team review done
+# (fm_pr_team_review_state in bin/fm-pr-lib.sh, written by bin/fm-pr-check.sh
+# --team-review), and after the live pre-merge verify the head it binds the
+# merge to must be exactly the head that record approved, so commits pushed
+# after the review are never merged on its strength. Recording
+# `--team-review done` for the current head is the only way to satisfy it. A
+# non-feature, a PR into any other branch, and every PR of a project without the
+# opt-in are unaffected and cost no extra forge read. An unreadable base or
+# default branch refuses rather than skipping the check.
 #
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--skip-team-review] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -205,7 +209,6 @@ if [ "$PROVIDER" = gerrit ]; then
 fi
 shift 2
 ATTENDED_OVERRIDE=false
-SKIP_TEAM_REVIEW=false
 ALLOW_RED=()
 ALLOW_MISSING=()
 while [ "$#" -gt 0 ]; do
@@ -216,14 +219,6 @@ while [ "$#" -gt 0 ]; do
       ;;
     --attended-override=*)
       echo "error: --attended-override takes no value" >&2
-      exit 2
-      ;;
-    --skip-team-review)
-      SKIP_TEAM_REVIEW=true
-      shift
-      ;;
-    --skip-team-review=*)
-      echo "error: --skip-team-review takes no value" >&2
       exit 2
       ;;
     --allow-red)
@@ -1132,33 +1127,55 @@ read_base_and_default_branch() {
   printf '%s %s\n' "$base" "$default"
 }
 
-# The registered team review requirement; the header owns the contract.
+# The registered team review requirement; the header owns the contract. Sets
+# TEAM_REVIEW_HEAD to the approved head when a gated feature's record reads
+# done, for require_reviewed_head to compare after the live verify.
+TEAM_REVIEW_HEAD=
 require_team_review() {
-  local project required branches base default state
+  local project name required branches base default feature state
+  TEAM_REVIEW_HEAD=
   project=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
   [ -n "$project" ] || return 0
-  if ! required=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" --team-review "${project##*/}" 2>/dev/null); then
-    echo "error: could not read whether project ${project##*/} requires team review; refusing to merge" >&2
+  name=${project##*/}
+  if ! required=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" --team-review "$name" 2>/dev/null); then
+    echo "error: could not read whether project $name requires team review; refusing to merge" >&2
     return 1
   fi
   [ "$required" = on ] || return 0
   if ! branches=$(read_base_and_default_branch); then
-    echo "error: project ${project##*/} requires team review into its default branch, but the base or default branch of $URL could not be read; refusing to merge" >&2
+    echo "error: project $name requires team review for a feature merging into its default branch, but the base or default branch of $URL could not be read; refusing to merge" >&2
     return 1
   fi
   base=${branches%% *}
   default=${branches#* }
   [ "$base" = "$default" ] || return 0
+  feature=$(grep '^feature=' "$META" | tail -1 | cut -d= -f2- || true)
+  case "$feature" in
+    no) return 0 ;;
+    yes) ;;
+    *)
+      echo "error: project $name requires team review for a feature merging into its default branch $default, but task $ID records no feature classification (feature=yes|no, set at intake with fm-spawn.sh or fm-promote.sh --feature); refusing to merge" >&2
+      return 1
+      ;;
+  esac
   state=$(fm_pr_team_review_state "$META")
-  [ "$state" != "done" ] || return 0
-  if [ "$SKIP_TEAM_REVIEW" = true ]; then
-    printf 'note: merging %s into %s without a recorded team review, on an explicit --skip-team-review\n' "$URL" "$default" >&2
-    return 0
+  if [ "$state" = "done" ]; then
+    TEAM_REVIEW_HEAD=$(fm_pr_team_review_head "$META")
+    [ -z "$TEAM_REVIEW_HEAD" ] || return 0
   fi
   case "$state" in
-    in-review) echo "error: $URL is still in team review; project ${project##*/} requires team review before a PR merges into its default branch $default - record it done with bin/fm-pr-check.sh --team-review done $ID, or pass --skip-team-review on an explicit captain instruction" >&2 ;;
-    *) echo "error: $URL has no recorded team review; project ${project##*/} requires team review before a PR merges into its default branch $default - record it with bin/fm-pr-check.sh --team-review in-review|done $ID, or pass --skip-team-review on an explicit captain instruction" >&2 ;;
+    in-review) echo "error: $URL is in team review; project $name requires team review before a feature merges into its default branch $default - record it done for the reviewed head with bin/fm-pr-check.sh --team-review done $ID" >&2 ;;
+    *) echo "error: $URL has no recorded team review; project $name requires team review before a feature merges into its default branch $default - record it with bin/fm-pr-check.sh --team-review in-review $ID, then --team-review done $ID once the team has reviewed it" >&2 ;;
   esac
+  return 1
+}
+
+# After the live verify: the head the merge is bound to must be the head the
+# team review approved.
+require_reviewed_head() {
+  [ -n "$TEAM_REVIEW_HEAD" ] || return 0
+  [ "$TEAM_REVIEW_HEAD" = "$FM_PR_MERGE_HEAD" ] && return 0
+  echo "error: team review of $URL was recorded at $TEAM_REVIEW_HEAD, but its head is now $FM_PR_MERGE_HEAD; the new commits have not been team reviewed - record --team-review done $ID again once the team has reviewed them" >&2
   return 1
 }
 
@@ -1212,10 +1229,6 @@ require_current_away_authority() {
   fi
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
     echo "error: --allow-missing is attended-only; while the away-posture record exists every required check must report" >&2
-    return 2
-  fi
-  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$SKIP_TEAM_REVIEW" = true ]; then
-    echo "error: --skip-team-review is attended-only; while the away-posture record exists a registered team review requirement is absolute" >&2
     return 2
   fi
 }
@@ -1455,6 +1468,7 @@ case "$PROVIDER" in
       fi
       exit 1
     fi
+    require_reviewed_head || exit 1
     # The away record is locked first, so this last presence and authority read
     # and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1
@@ -1506,6 +1520,7 @@ case "$PROVIDER" in
     ;;
   gitlab)
     gitlab_verify_mergeable || exit 1
+    require_reviewed_head || exit 1
     # --sha binds the merge to the head this run verified, so a push that lands
     # in between is refused by GitLab instead of merged unverified. --yes only
     # skips the interactive confirmation, which no supervised run can answer;

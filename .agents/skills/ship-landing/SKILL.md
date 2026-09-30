@@ -18,7 +18,7 @@ In no-mistakes mode the earlier `done [at=<epoch>]: {summary}` is the pipeline h
 Tell the captain the PR's full `https://...` URL copied from the worker's ready line, the resolved checks-green crew-state line, or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 When the captain says a recorded PR is out for team review, record it with `bin/fm-pr-check.sh --team-review in-review <id>`, and record the team's approval with `--team-review done <id>`; the script header owns what each records.
-A PR in team review is not a merge ask, and `bin/fm-pr-merge.sh` refuses a default-branch merge on a project registered `+team-review` until its team review reads done.
+A PR in team review is not a merge ask, and `bin/fm-pr-merge.sh` refuses a feature's default-branch merge on a project registered `+team-review` until team review reads done for the head being merged; a push after review puts it back in team review.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 

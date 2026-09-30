@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--feature <yes|no>] [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
@@ -31,6 +31,12 @@
 #   loud one-line deviation notice is printed and the spawn continues.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
+#   --feature <yes|no> is this ship's intake classification as a feature or not,
+#   recorded as feature=<yes|no> in the task record. It is REQUIRED for a ship
+#   whose project is registered +team-review (bin/fm-project-mode.sh), where
+#   bin/fm-pr-merge.sh requires team review before a feature merges into the
+#   default branch; elsewhere it is optional and recorded when given. It is
+#   refused on scouts, secondmates, and relaunches, which keep the recorded value.
 #   --branch-prefix is the optional prefix selected at intake for this ship's
 #   immutable branch, defaulting to "fm/". It must agree with the branch recorded
 #   in the brief, and is refused on scouts, secondmates, and relaunches. When the
@@ -642,6 +648,7 @@ EFFORT=
 BACKEND_ARG=
 MODE=
 YOLO=
+FEATURE=
 BRANCH_PREFIX=fm/
 TRACEPARENT_ARG=
 HARNESS_SET=0
@@ -650,6 +657,7 @@ EFFORT_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
+FEATURE_SET=0
 BRANCH_PREFIX_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
@@ -687,6 +695,10 @@ for a in "$@"; do
     yolo)
       YOLO=$a
       YOLO_SET=1
+      ;;
+    feature)
+      FEATURE=$a
+      FEATURE_SET=1
       ;;
     branch-prefix)
       BRANCH_PREFIX=$a
@@ -743,6 +755,11 @@ for a in "$@"; do
   --yolo=*)
     YOLO=${a#--yolo=}
     YOLO_SET=1
+    ;;
+  --feature) want_value=feature ;;
+  --feature=*)
+    FEATURE=${a#--feature=}
+    FEATURE_SET=1
     ;;
   --branch-prefix) want_value="branch-prefix" ;;
   --branch-prefix=*)
@@ -831,6 +848,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded yolo posture; --yolo cannot override it" >&2
     exit 1
   }
+  [ "$FEATURE_SET" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded feature classification; --feature cannot override it" >&2
+    exit 1
+  }
   [ "$BRANCH_PREFIX_SET" -eq 0 ] || {
     echo "error: --relaunch reuses the task's recorded ship branch; --branch-prefix cannot override it" >&2
     exit 1
@@ -867,6 +888,13 @@ else
       exit 1
       ;;
     esac
+    case "$FEATURE_SET:$FEATURE" in
+    0:* | 1:yes | 1:no) ;;
+    *)
+      echo "error: --feature must be yes or no (got '$FEATURE')" >&2
+      exit 1
+      ;;
+    esac
   else
     [ "$MODE_SET" -eq 0 ] || {
       echo "error: --mode applies only to ship spawns; a scout delivers a report and a secondmate records its own fixed posture" >&2
@@ -874,6 +902,10 @@ else
     }
     [ "$YOLO_SET" -eq 0 ] || {
       echo "error: --yolo applies only to ship spawns; a scout delivers a report and a secondmate records its own fixed posture" >&2
+      exit 1
+    }
+    [ "$FEATURE_SET" -eq 0 ] || {
+      echo "error: --feature applies only to ship spawns; a scout delivers a report and a secondmate merges nothing of its own" >&2
       exit 1
     }
     [ "$BRANCH_PREFIX_SET" -eq 0 ] || {
@@ -1460,6 +1492,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # spanning several modes is two invocations rather than a silent mixed dispatch.
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
+  [ "$FEATURE_SET" -eq 0 ] || shared_args+=(--feature "$FEATURE")
   [ "$BRANCH_PREFIX_SET" -eq 0 ] || shared_args+=(--branch-prefix "$BRANCH_PREFIX")
   for pair in "${POS[@]}"; do
     case "$pair" in
@@ -1778,6 +1811,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  FEATURE=$(fm_meta_get "$RELAUNCH_META" feature)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
     [ -n "$BRANCH" ] || BRANCH="fm/$ID"
@@ -3123,6 +3157,15 @@ if [ "$KIND" = ship ]; then
   # the captain's decision of 2026-09-15: a Code-Review+2 is a positive
   # attributed claim that a named human approved, and firstmate must not
   # manufacture one.
+  # A project registered +team-review gates a feature's merge into the default
+  # branch on recorded team review, so the classification that decides it is
+  # required at intake, exactly as the delivery mode is. A relaunch keeps the
+  # record it already has.
+  if [ "$RELAUNCH" -eq 0 ] && [ -z "$FEATURE" ] \
+    && [ "$("$FM_ROOT/bin/fm-project-mode.sh" --team-review "$PROJ_NAME" 2>/dev/null)" = on ]; then
+    echo "error: $ID cannot launch: $PROJ_NAME is registered +team-review, so a ship spawn requires --feature <yes|no>; classify at intake whether this task is a feature, since only a feature needs team review before it merges into the default branch" >&2
+    exit 1
+  fi
   if [ "$STANDING_FORGE" = gerrit ] && [ "$YOLO" = on ]; then
     echo "error: --yolo on is refused for $ID: $PROJ_NAME is registered forge=gerrit, where yolo is inactive because a Code-Review+2 is a positive attributed claim that a named human approved and firstmate must not manufacture one (captain's decision 2026-09-15); spawn with --yolo off" >&2
     exit 1
@@ -4859,7 +4902,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo feature branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -4874,6 +4917,7 @@ preserve_relaunch_meta() {
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
+  [ -z "$FEATURE" ] || echo "feature=$FEATURE"
   [ -z "${BRANCH:-}" ] || echo "branch=$BRANCH"
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"

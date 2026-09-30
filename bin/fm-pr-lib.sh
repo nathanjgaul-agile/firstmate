@@ -278,27 +278,59 @@ fm_pr_json_draft_state() {  # <pull-request-json>
 
 # The one reading of a task's team-review record: whether its recorded PR is
 # out with the project's human reviewers. bin/fm-pr-check.sh --team-review
-# writes team_review=<in-review|done> together with team_review_pr=<url>, and
-# the record applies only while that URL is still the task's recorded pr=, so a
-# task that moves on to another PR starts that PR with no team review. Prints
-# in-review, done, or none. bin/fm-crew-state.sh and bin/fm-fleet-snapshot.sh
-# report it, and bin/fm-pr-merge.sh requires done where a project opts in.
-fm_pr_team_review_state() {  # <meta>
-  local meta=$1 line pr='' state='' bound=''
-  [ -f "$meta" ] && [ -r "$meta" ] || { printf 'none\n'; return 0; }
+# writes team_review=<in-review|done> together with team_review_pr=<url>, and a
+# done record also carries team_review_head=<sha>, the PR head the review
+# approved. The record applies only while that URL is still the task's recorded
+# pr=, so a task that moves on to another PR starts it with no team review, and
+# a done record whose head is no longer the recorded pr_head (a later push) reads
+# in-review again until done is recorded for the new head. Where no pr_head is
+# recorded (GitLab), done stands here and bin/fm-pr-merge.sh's comparison with
+# the live head it verifies is the authority. Prints in-review, done, or none;
+# fm_pr_team_review_head prints the approved head of a done record.
+# bin/fm-crew-state.sh and bin/fm-fleet-snapshot.sh report the state, and
+# bin/fm-pr-merge.sh requires done for a feature on a project registered
+# +team-review.
+_fm_pr_team_review_read() {  # <meta> -> sets _FM_TR_{PR,STATE,BOUND,HEAD,PR_HEAD}
+  local line
+  _FM_TR_PR='' _FM_TR_STATE='' _FM_TR_BOUND='' _FM_TR_HEAD='' _FM_TR_PR_HEAD=''
+  [ -f "$1" ] && [ -r "$1" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      pr=*) pr=${line#pr=} ;;
-      team_review=*) state=${line#team_review=} ;;
-      team_review_pr=*) bound=${line#team_review_pr=} ;;
+      pr=*) _FM_TR_PR=${line#pr=} ;;
+      pr_head=*) _FM_TR_PR_HEAD=${line#pr_head=} ;;
+      team_review=*) _FM_TR_STATE=${line#team_review=} ;;
+      team_review_pr=*) _FM_TR_BOUND=${line#team_review_pr=} ;;
+      team_review_head=*) _FM_TR_HEAD=${line#team_review_head=} ;;
     esac
-  done < "$meta"
-  if [ -n "$pr" ] && [ "$bound" = "$pr" ]; then
-    case "$state" in
-      in-review|done) printf '%s\n' "$state"; return 0 ;;
+  done < "$1"
+}
+
+fm_pr_team_review_state() {  # <meta>
+  _fm_pr_team_review_read "$1"
+  if [ -n "$_FM_TR_PR" ] && [ "$_FM_TR_BOUND" = "$_FM_TR_PR" ]; then
+    case "$_FM_TR_STATE" in
+      in-review) printf 'in-review\n'; return 0 ;;
+      done)
+        if ! fm_pr_head_valid "$_FM_TR_HEAD"; then
+          printf 'in-review\n'
+        elif [ -n "$_FM_TR_PR_HEAD" ] && [ "$_FM_TR_PR_HEAD" != "$_FM_TR_HEAD" ]; then
+          printf 'in-review\n'
+        else
+          printf 'done\n'
+        fi
+        return 0
+        ;;
     esac
   fi
   printf 'none\n'
+}
+
+fm_pr_team_review_head() {  # <meta>
+  _fm_pr_team_review_read "$1"
+  if [ -n "$_FM_TR_PR" ] && [ "$_FM_TR_BOUND" = "$_FM_TR_PR" ] && [ "$_FM_TR_STATE" = "done" ] \
+    && fm_pr_head_valid "$_FM_TR_HEAD"; then
+    printf '%s\n' "$_FM_TR_HEAD"
+  fi
 }
 
 fm_pr_file_mode() {

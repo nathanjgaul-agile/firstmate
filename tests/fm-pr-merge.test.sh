@@ -363,6 +363,11 @@ case "${1:-} ${2:-}" in
     fi
     exit 0
     ;;
+  "api projects/"*)
+    # The team-review gate's default-branch read; only a +team-review case asks.
+    printf '{"default_branch":"main"}\n'
+    exit 0
+    ;;
   "mr merge")
     [ ! -e "$case_dir/glab-merge-fails" ] || { echo "error: mr merge failed" >&2 ; exit 1 ; }
     : > "$case_dir/glab-merge-called"
@@ -409,7 +414,7 @@ write_mr_json() {
     "$state" "$detail" "$conflicts" > "$file"
   printf '"blocking_discussions_resolved":%s,"sha":"%s","head_pipeline":%s,' \
     "$discussions" "$head" "$pipeline" >> "$file"
-  printf '"merge_when_pipeline_succeeds":%s,"merge_after":%s}\n' \
+  printf '"merge_when_pipeline_succeeds":%s,"merge_after":%s,"target_branch":"main"}\n' \
     "$merge_when_pipeline_succeeds" "$merge_after" >> "$file"
 }
 
@@ -2370,13 +2375,15 @@ test_secondmate_without_parent_binding_is_loud() {
 }
 
 # --- registered team review gate ---------------------------------------------
-# A case whose project is registered +team-review (or not, with "off"), bound to
-# PR 120, with the green GitHub mocks. Echoes the case dir.
+# A case whose project is registered +team-review (or not, with "off"), whose
+# task carries the given feature classification ("-" for none), bound to PR 120
+# with the green GitHub mocks at TEAM_REVIEW_HEAD. Echoes the case dir.
+TEAM_REVIEW_HEAD=1212121212121212121212121212121212121212
 make_team_review_case() {
-  local name=$1 opt_in=$2 case_dir
+  local name=$1 opt_in=$2 feature=${3:-yes} case_dir
   case_dir=$(make_case "$name")
   mkdir -p "$case_dir/wt"
-  add_gh_mocks "$case_dir" 1212121212121212121212121212121212121212
+  add_gh_mocks "$case_dir" "$TEAM_REVIEW_HEAD"
   if [ "$opt_in" = on ]; then
     printf '%s\n' '- project [no-mistakes +team-review] - team review fixture (added 2026-01-01)' \
       > "$case_dir/home/data/projects.md"
@@ -2384,13 +2391,17 @@ make_team_review_case() {
     printf '%s\n' '- project [no-mistakes] - team review fixture (added 2026-01-01)' \
       > "$case_dir/home/data/projects.md"
   fi
+  [ "$feature" = - ] || printf 'feature=%s\n' "$feature" >> "$case_dir/state/task-x1.meta"
   printf 'pr=%s\n' https://github.com/example/repo/pull/120 >> "$case_dir/state/task-x1.meta"
   printf '%s\n' "$case_dir"
 }
 
-# Record team review through its own executable interface.
-record_team_review() {  # <case-dir> <in-review|done|clear>
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$1/home" FM_STATE_OVERRIDE="$1/state" \
+# Record team review through its own executable interface, against the case's
+# forge mock, so done binds to the head the mock reports.
+record_team_review() {  # <case-dir> <in-review|done>
+  PATH="$1/fakebin:$PATH" FM_TEST_GH_LOG="$1/gh.log" FM_TEST_GH_HEAD="$1/github-head" \
+    FM_TEST_GH_VIEW_JSON="$1/github-view.json" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$1/home" FM_STATE_OVERRIDE="$1/state" \
     "$ROOT/bin/fm-pr-check.sh" --team-review "$2" task-x1 >/dev/null \
     || fail "could not record team review $2 for $1"
 }
@@ -2405,35 +2416,47 @@ run_team_review_merge() {  # <case-dir> [extra args...]
   set -e
 }
 
-test_team_review_gate_refuses_default_branch_merge_until_done() {
+test_team_review_gate_refuses_feature_merge_until_done() {
   local case_dir
   case_dir=$(make_team_review_case team-review-none on)
   run_team_review_merge "$case_dir"
-  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-none: a default-branch merge with no team review must refuse"
+  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-none: a feature's default-branch merge with no team review must refuse"
   assert_grep 'has no recorded team review' "$case_dir/stderr" "team-review-none: refusal did not name the missing team review"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-none: gh pr merge ran without team review"
 
   case_dir=$(make_team_review_case team-review-in-review on)
   record_team_review "$case_dir" in-review
   run_team_review_merge "$case_dir"
-  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-in-review: a merge still in team review must refuse"
-  assert_grep 'is still in team review' "$case_dir/stderr" "team-review-in-review: refusal did not say it is still in team review"
+  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-in-review: a feature still in team review must refuse"
+  assert_grep 'is in team review' "$case_dir/stderr" "team-review-in-review: refusal did not say it is in team review"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-in-review: gh pr merge ran during team review"
 
   case_dir=$(make_team_review_case team-review-done on)
   record_team_review "$case_dir" in-review
   record_team_review "$case_dir" "done"
   run_team_review_merge "$case_dir"
-  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-done: a merge after team review must proceed"$'\n'"$(cat "$case_dir/stderr")"
+  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-done: a feature after team review must merge"$'\n'"$(cat "$case_dir/stderr")"
   assert_logged_gh_merge "$case_dir" 120 example/repo --squash
+  pass "fm-pr-merge refuses a registered feature's default-branch merge until team review is recorded done"
+}
 
-  case_dir=$(make_team_review_case team-review-cleared on)
+# A done record covers the head the team reviewed: a later push leaves the
+# merge refused until done is recorded for the new head.
+test_team_review_done_for_an_older_head_refuses() {
+  local case_dir
+  case_dir=$(make_team_review_case team-review-stale-head on)
   record_team_review "$case_dir" "done"
-  record_team_review "$case_dir" clear
+  write_github_live_json "$case_dir" 3434343434343434343434343434343434343434
   run_team_review_merge "$case_dir"
-  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-cleared: a cleared record must not satisfy the gate"
-  assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-cleared: gh pr merge ran after the record was cleared"
-  pass "fm-pr-merge refuses a registered default-branch merge until team review is recorded done"
+  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-stale-head: a merge of commits pushed after team review must refuse"
+  assert_grep 'is in team review' "$case_dir/stderr" "team-review-stale-head: refusal did not return the PR to team review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-stale-head: gh pr merge ran on unreviewed commits"
+
+  record_team_review "$case_dir" "done"
+  run_team_review_merge "$case_dir"
+  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-stale-head: team review recorded for the new head must merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 120 example/repo --squash
+  pass "fm-pr-merge binds team review to the head it approved"
 }
 
 # A done record belongs to the PR it was recorded for: the task's next PR starts
@@ -2442,7 +2465,8 @@ test_team_review_done_for_another_pr_does_not_count() {
   local case_dir
   case_dir=$(make_team_review_case team-review-other-pr on)
   # The record sits ahead of pr=, where bin/fm-pr-check.sh writes it.
-  { printf '%s\n' team_review=done team_review_pr=https://github.com/example/repo/pull/119
+  { printf '%s\n' team_review=done team_review_pr=https://github.com/example/repo/pull/119 \
+      "team_review_head=$TEAM_REVIEW_HEAD"
     cat "$case_dir/state/task-x1.meta"; } > "$case_dir/meta.new"
   mv "$case_dir/meta.new" "$case_dir/state/task-x1.meta"
   run_team_review_merge "$case_dir"
@@ -2450,6 +2474,27 @@ test_team_review_done_for_another_pr_does_not_count() {
   assert_grep 'has no recorded team review' "$case_dir/stderr" "team-review-other-pr: refused for a reason other than the missing team review"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-other-pr: gh pr merge ran on another PR's team review"
   pass "fm-pr-merge binds a team review record to the PR it was recorded for"
+}
+
+# Only a task classified as a feature is gated, and a missing classification on
+# an opted-in project refuses rather than guessing, for a default-branch merge.
+test_team_review_gate_applies_only_to_classified_features() {
+  local case_dir
+  case_dir=$(make_team_review_case team-review-non-feature on no)
+  run_team_review_merge "$case_dir"
+  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-non-feature: a fix or chore into main must not need team review"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 120 example/repo --squash
+
+  case_dir=$(make_team_review_case team-review-unclassified on -)
+  run_team_review_merge "$case_dir"
+  expect_code 1 "$TEAM_REVIEW_MERGE_RC" "team-review-unclassified: an unclassified task into main must refuse"
+  assert_grep 'records no feature classification' "$case_dir/stderr" "team-review-unclassified: refusal did not name the missing classification"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-unclassified: gh pr merge ran on an unclassified task"
+
+  case_dir=$(make_team_review_case team-review-unclassified-branch on -)
+  FM_TEST_GH_BASE_BRANCH=feature/spec-038 run_team_review_merge "$case_dir"
+  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-unclassified-branch: a merge into a feature branch needs no classification"$'\n'"$(cat "$case_dir/stderr")"
+  pass "fm-pr-merge gates only tasks classified as features, and refuses an unclassified default-branch merge"
 }
 
 test_team_review_gate_ignores_non_default_base_and_unregistered_projects() {
@@ -2479,37 +2524,57 @@ test_team_review_gate_refuses_an_unreadable_default_branch() {
   pass "fm-pr-merge refuses a registered team review it cannot rule out"
 }
 
-test_skip_team_review_is_attended_only() {
+# Recording team review done is the only way through: no flag bypasses it, and
+# a recorded review merges under away authority like any green merge.
+test_team_review_has_no_bypass() {
   local case_dir
-  case_dir=$(make_team_review_case team-review-skip on)
-  record_team_review "$case_dir" in-review
+  case_dir=$(make_team_review_case team-review-no-bypass on)
   run_team_review_merge "$case_dir" --skip-team-review
-  expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-skip: an attended override must merge"$'\n'"$(cat "$case_dir/stderr")"
-  assert_grep 'without a recorded team review' "$case_dir/stderr" "team-review-skip: the override was not announced"
-  assert_logged_gh_merge "$case_dir" 120 example/repo --squash
-
-  case_dir=$(make_team_review_case team-review-skip-away on)
-  write_away_record "$case_dir" --words 'merge task-x1 when green'
-  run_team_review_merge "$case_dir" --skip-team-review
-  expect_code 2 "$TEAM_REVIEW_MERGE_RC" "team-review-skip-away: the override must be refused while away"
-  assert_grep '--skip-team-review is attended-only' "$case_dir/stderr" "team-review-skip-away: refusal did not name attended-only"
-  assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-skip-away: gh pr merge ran on an away override"
+  [ "$TEAM_REVIEW_MERGE_RC" -ne 0 ] || fail "team-review-no-bypass: a bypass flag merged a feature with no team review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "team-review-no-bypass: gh pr merge ran on a bypass flag"
 
   case_dir=$(make_team_review_case team-review-away-done on)
   record_team_review "$case_dir" "done"
   write_away_record "$case_dir" --words 'merge task-x1 when green'
   run_team_review_merge "$case_dir"
   expect_code 0 "$TEAM_REVIEW_MERGE_RC" "team-review-away-done: a recorded team review must merge under away authority"$'\n'"$(cat "$case_dir/stderr")"
-  pass "fm-pr-merge --skip-team-review merges attended, and is refused while away"
+  pass "fm-pr-merge has no team review bypass, and a recorded review merges under away authority"
+}
+
+# GitLab records no pr_head, so the approved head is compared with the head the
+# live verify binds the merge to: a push after team review refuses there.
+test_team_review_gitlab_binds_the_verified_head() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case team-review-gitlab)
+  printf '%s\n' '- project [no-mistakes +team-review] - team review fixture (added 2026-01-01)' \
+    > "$case_dir/home/data/projects.md"
+  { printf 'feature=yes\n'; cat "$case_dir/state/task-x1.meta"; printf 'pr=%s\n' "$MR_URL"; } > "$case_dir/meta.new"
+  mv "$case_dir/meta.new" "$case_dir/state/task-x1.meta"
+  PATH="$case_dir/fakebin:$PATH" FM_TEST_GLAB_LOG="$case_dir/glab.log" FM_TEST_GLAB_JSON="$case_dir/mr.json" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir/home" FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-pr-check.sh" --team-review "done" task-x1 >/dev/null || fail "team-review-gitlab: could not record team review"
+  grep -qx "team_review_head=$MR_HEAD" "$case_dir/state/task-x1.meta" || fail "team-review-gitlab: done did not bind the live head"
+  write_mr_json "$case_dir/mr.json" "head=$MR_STALE_HEAD" "pipeline_sha=$MR_STALE_HEAD"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "team-review-gitlab: a merge of commits pushed after team review must refuse"
+  assert_grep 'have not been team reviewed' "$case_dir/stderr" "team-review-gitlab: refusal did not name the unreviewed commits"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] || fail "team-review-gitlab: glab merged unreviewed commits"
+  pass "fm-pr-merge refuses a GitLab merge whose verified head is not the head team review approved"
 }
 
 test_github_zero_exit_queue_required_refuses_with_exact_retry
 test_github_closed_unqueued_outcome_omits_retry_flags
-test_team_review_gate_refuses_default_branch_merge_until_done
+test_team_review_gate_refuses_feature_merge_until_done
+test_team_review_done_for_an_older_head_refuses
 test_team_review_done_for_another_pr_does_not_count
+test_team_review_gate_applies_only_to_classified_features
 test_team_review_gate_ignores_non_default_base_and_unregistered_projects
 test_team_review_gate_refuses_an_unreadable_default_branch
-test_skip_team_review_is_attended_only
+test_team_review_has_no_bypass
+test_team_review_gitlab_binds_the_verified_head
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head

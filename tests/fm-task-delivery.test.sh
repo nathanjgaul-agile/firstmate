@@ -1649,6 +1649,58 @@ EOF
   pass "fm-project-mode: +team-review resolves order-independently through --team-review only"
 }
 
+# On a +team-review project the feature classification is part of the intake
+# contract, exactly like the delivery mode: a ship spawn or promotion without it
+# refuses before anything is created, and elsewhere it stays optional.
+test_team_review_intake_requires_a_feature_classification() {
+  local rec home proj fakebin out status meta
+  rec=$(make_home feature-intake '- proj [no-mistakes +team-review] - team review fixture (added 2026-01-01)')
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_brief "$home" feature-a1 no-mistakes
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unclassified ship spawn on a +team-review project should exit non-zero"
+  assert_contains "$out" "requires --feature <yes|no>" "the spawn refusal did not name the missing classification"
+  assert_absent "$home/state/feature-a1.meta" "a refused unclassified spawn wrote task metadata"
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --mode no-mistakes --yolo off --feature maybe)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unknown feature classification should exit non-zero"
+  assert_contains "$out" "--feature must be yes or no" "the spawn did not refuse an unknown classification"
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --mode no-mistakes --yolo off --feature yes)
+  case "$out" in *"requires --feature"*) fail "a classified spawn was still refused for its classification: $out" ;; esac
+  out=$(run_spawn "$home" "$fakebin" feature-a1 "$proj" claude --scout --feature yes)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a scout spawn carrying --feature should exit non-zero"
+  assert_contains "$out" "--feature applies only to ship spawns" "scout spawn did not refuse --feature"
+
+  rec=$(make_home feature-optional '- proj [no-mistakes] - no team review fixture (added 2026-01-01)')
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_brief "$home" feature-b1 no-mistakes
+  out=$(run_spawn "$home" "$fakebin" feature-b1 "$proj" claude --mode no-mistakes --yolo off)
+  case "$out" in *"requires --feature"*) fail "a project without +team-review required a classification: $out" ;; esac
+
+  home="$TMP_ROOT/feature-promote/home"
+  mkdir -p "$home/state" "$home/data"
+  printf '%s\n' '- proj [no-mistakes +team-review] - team review fixture (added 2026-01-01)' > "$home/data/projects.md"
+  meta="$home/state/feature-c1.meta"
+  write_brief "$home" feature-c1
+  printf 'window=fm-feature-c1\nkind=scout\nworktree=/tmp/wt\nproject=%s/proj\n' "$TMP_ROOT/feature-promote" > "$meta"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" feature-c1 --mode direct-PR --yolo off 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unclassified promotion on a +team-review project should exit non-zero"
+  assert_contains "$out" "promotion requires --feature <yes|no>" "the promotion refusal did not name the missing classification"
+  assert_grep 'kind=scout' "$meta" "a refused unclassified promotion changed the task record"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" feature-c1 --mode direct-PR --yolo off --feature no 2>&1)
+  status=$?
+  expect_code 0 "$status" "a classified promotion should succeed: $out"
+  grep -qx 'feature=no' "$meta" || fail "promotion did not record the feature classification"
+  pass "fm-spawn and fm-promote require a feature classification on a +team-review project"
+}
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
@@ -1675,4 +1727,5 @@ test_promotion_carries_the_forge_binding
 test_spawn_and_promote_require_filled_task_subsections
 test_project_mode_resolves_branch_prefix
 test_project_mode_resolves_team_review
+test_team_review_intake_requires_a_feature_classification
 echo "# all fm-task-delivery tests passed"

@@ -1104,8 +1104,47 @@ test_team_review_is_not_a_captain_merge_call() {
   pass 'a PR in team review is listed on its own, not as a captain merge call, until its review is done'
 }
 
+# On a +team-review project the projection never offers a merge the team review
+# gate would refuse: a feature into the default branch without team review done
+# for its observed head waits on the reviewers, an unclassified task is fleet
+# work, and a PR into another branch is unaffected.
+test_team_review_requirement_withholds_merge_calls() {
+  local home out
+  project_actor() {  # <home> -> the delivery row's actor and reason
+    with_home "$1" "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input > "$1/input.json" \
+      || fail 'could not collect contribution input'
+    with_home "$1" "$ROOT/bin/fm-contributions.sh" snapshot "$1/input.json" --all \
+      | jq -r '[.counts.captain, .counts.maintainer, .counts.fleet] | map(tostring) | join(" ")'
+  }
+  home=$(new_home team-review-required)
+  forge_home "$home"
+  mkdir -p "$home/projects/sample"
+  printf '%s\n' '- sample [no-mistakes +team-review] - team review fixture (added 2026-09-16)' > "$home/data/projects.md"
+  printf 'project=%s/projects/sample\nfeature=yes\n' "$home" >> "$home/state/delivery.meta"
+  with_home "$home" "$ROOT/bin/fm-pr-check.sh" delivery https://github.com/o/r/pull/8 >/dev/null \
+    || fail 'could not register the feature delivery'
+  mutate_record "$home" delivery '.records[0].observation.can_merge=true'
+  [ "$(project_actor "$home")" = "0 1 0" ] || fail "a feature with no team review was offered as a merge: $(project_actor "$home")"
+
+  with_home "$home" "$ROOT/bin/fm-pr-check.sh" --team-review "done" delivery >/dev/null \
+    || fail 'could not record team review done'
+  [ "$(project_actor "$home")" = "1 0 0" ] || fail "a feature reviewed at its observed head was not a captain merge call: $(project_actor "$home")"
+
+  mutate_record "$home" delivery ".records[0].observation.head=\"$HEAD_B\""
+  [ "$(project_actor "$home")" = "0 1 0" ] || fail "a feature reviewed at an older head was offered as a merge: $(project_actor "$home")"
+
+  mutate_record "$home" delivery ".records[0].observation.into_default=false"
+  [ "$(project_actor "$home")" = "1 0 0" ] || fail "a PR into another branch was held for team review: $(project_actor "$home")"
+
+  mutate_record "$home" delivery ".records[0].observation.head=\"$HEAD_A\" | .records[0].observation.into_default=null"
+  grep -v '^feature=' "$home/state/delivery.meta" > "$home/meta.new" && mv "$home/meta.new" "$home/state/delivery.meta"
+  chmod 600 "$home/state/delivery.meta"
+  [ "$(project_actor "$home")" = "0 0 1" ] || fail "an unclassified task on a +team-review project was not fleet work: $(project_actor "$home")"
+  pass 'a +team-review requirement withholds every merge call the team review gate would refuse'
+}
+
 failures=0
-for test_name in test_team_review_is_not_a_captain_merge_call test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed; do
+for test_name in test_team_review_requirement_withholds_merge_calls test_team_review_is_not_a_captain_merge_call test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

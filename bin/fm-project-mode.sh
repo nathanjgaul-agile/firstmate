@@ -50,11 +50,12 @@
 #                          project as the remote-backed pipeline project it is.
 # yolo (orthogonal) = merge authority only: when on, firstmate merges green,
 #   in-scope work itself (AGENTS.md section 7).
-# +team-review (orthogonal) = a PR into the repository's default branch merges
-#   only after its team review is recorded done (bin/fm-pr-check.sh
-#   --team-review); bin/fm-pr-merge.sh enforces it and owns the explicit
-#   attended override. PRs into any other branch are unaffected. It never
-#   appears in the default "<mode> <yolo>" output.
+# +team-review (orthogonal) = a feature PR into the repository's default branch
+#   merges only after its team review is recorded done (bin/fm-pr-check.sh
+#   --team-review), and a ship spawn or promotion must classify the task with
+#   --feature <yes|no>; bin/fm-pr-merge.sh enforces the gate. Non-features and
+#   PRs into any other branch are unaffected. It never appears in the default
+#   "<mode> <yolo>" output.
 # branch=<prefix> (orthogonal) = overrides the "fm/" ship-branch prefix so a
 #   project's branch and PR do not read as firstmate-authored, e.g. for a
 #   third-party repo that does not use this tooling. Query it with

@@ -2832,13 +2832,13 @@ test_team_review_pr_reads_as_in_team_review() {
   assert_contains "$out" "state: done" "a ready PR reads done before team review"
   case "$out" in *"team review"*) fail "a PR with no team review record mentioned team review: $out" ;; esac
 
-  FM_STATE_OVERRIDE="$d/state" "$ROOT/bin/fm-pr-check.sh" --team-review in-review feat-review >/dev/null \
+  PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" "$ROOT/bin/fm-pr-check.sh" --team-review in-review feat-review >/dev/null \
     || fail "could not record team review"
   out=$(run_crew_state "$d" feat-review)
   assert_contains "$out" "state: paused" "a PR in team review is a declared wait"
   assert_contains "$out" "team review: in team review $url" "a PR in team review is labelled in team review"
 
-  FM_STATE_OVERRIDE="$d/state" "$ROOT/bin/fm-pr-check.sh" --team-review "done" feat-review >/dev/null \
+  PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" "$ROOT/bin/fm-pr-check.sh" --team-review "done" feat-review >/dev/null \
     || fail "could not record team review done"
   out=$(run_crew_state "$d" feat-review)
   assert_contains "$out" "state: done" "a PR whose team review is done is ready again"
