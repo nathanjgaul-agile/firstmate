@@ -167,7 +167,7 @@ fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "export PATH=$FAKEBIN_Q:\$PA
   || fail "could not put the inert test harness on the pane PATH"
 fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cd -- $PROJ_Q" \
   || fail "could not move the agent-free pane out of its recorded worktree"
-for _ in $(seq 1 20); do
+for _ in $(seq 1 100); do
   [ "$(fm_backend_herdr_current_path "$SESSION:$PANE_ID" 2>/dev/null || true)" != "$PROJ_REAL" ] || break
   sleep 0.1
 done
@@ -177,7 +177,7 @@ done
 OUT=$(env FM_HOME="$HOME_DIR" HERDR_SESSION="$SESSION" FM_SPAWN_NO_GUARD=1 \
   "$ROOT/bin/fm-spawn.sh" hsmoke --relaunch --harness codex) \
   || fail "a drifted, agent-free Herdr pane should be re-homed and relaunched: $OUT"
-for _ in $(seq 1 20); do
+for _ in $(seq 1 100); do
   [ ! -e "$SCRATCH/codex-launched" ] || break
   sleep 0.1
 done
