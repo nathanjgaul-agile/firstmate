@@ -122,6 +122,22 @@ test_render_refuses_invalid_notes() {
   pass "render: invalid notes, unchanged key diffs, and missing screenshots refuse before writing"
 }
 
+test_build_refuses_unheld_answer_keys() {
+  local out
+  rm -rf "${TMP_ROOT:?}/home"
+  mkdir -p "$TMP_ROOT/home/data" "$TMP_ROOT/fakebin"
+  printf '#!/bin/sh\ntouch "%s/lavish-called"\n' "$TMP_ROOT" > "$TMP_ROOT/fakebin/lavish-axi"
+  chmod +x "$TMP_ROOT/fakebin/lavish-axi"
+  notes .
+  out=$(PATH="$TMP_ROOT/fakebin:$PATH" FM_HOME="$TMP_ROOT/home" \
+    "$PAGE" build "$PROJ" feature/x main "$TMP_ROOT/notes.json" 2>&1) \
+    && fail "build served a page whose answer keys are not held: $out"
+  assert_contains "$out" "m1-review is not a task held for the captain" "the refusal did not name the unheld key"
+  assert_absent "$TMP_ROOT/home/.lavish/review-proj-feature-x.html" "a refused build wrote a page"
+  assert_absent "$TMP_ROOT/lavish-called" "a refused build reached Lavish"
+  pass "build: refuses before writing or serving when an answer key is not held for the captain"
+}
+
 test_summary_is_markdown() {
   local out
   notes .
@@ -133,4 +149,5 @@ test_summary_is_markdown() {
 
 test_render_queues_keyed_answers
 test_render_refuses_invalid_notes
+test_build_refuses_unheld_answer_keys
 test_summary_is_markdown

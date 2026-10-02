@@ -530,7 +530,12 @@ test_local_merge_onto_feature_branch_combines_tasks() {
   git -C "$FPROJ" cat-file -e feature/x:b.txt || fail "the feature branch is missing the second task's file"
   [ "$(git -C "$FPROJ" rev-parse main)" = "$main" ] || fail "landing onto a feature branch moved main"
   assert_contains "$out" "merged fm/feat-b into local feature/x" "landing did not report the feature branch"
-  pass "fm-merge-local --onto: fast-forwards, then merges a diverged task, leaving main alone"
+  fm_git_add_origin "$FPROJ" "$FPROJ.origin.git"
+  out=$(FM_HOME="$FHOME" FM_STATE_OVERRIDE="$FHOME/state" "$MERGE_LOCAL" feat-b --onto feature/x --push 2>&1) \
+    || fail "re-landing with a backup push failed: $out"
+  [ "$(git -C "$FPROJ.origin.git" rev-parse feature/x)" = "$(git -C "$FPROJ" rev-parse feature/x)" ] \
+    || fail "--push did not back the feature branch up to origin"
+  pass "fm-merge-local --onto: fast-forwards, merges a diverged task, re-lands idempotently, and backs up with --push"
 }
 
 test_local_merge_onto_feature_branch_refuses_unsafe_input() {

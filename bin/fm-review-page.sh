@@ -7,7 +7,8 @@
 #   fm-review-page.sh render <project-dir> <feature-branch> <base> <notes.json>
 #   fm-review-page.sh summary <notes.json>
 #
-# build    render, then serve the page through `fm-bearings-board.sh serve`,
+# build    Refuse unless verdict_key and every decision key is a task held for
+#          the captain, render, then serve the page through `fm-bearings-board.sh serve`,
 #          which proves the Lavish session live and binds its answers to the
 #          keyed-answer intake (bin/fm-captain-hold.sh) before arming it, exactly
 #          as the bearings board does. Output starts with `page: <path>`.
@@ -172,6 +173,17 @@ command_render() {
   printf 'page: %s\n' "$page"
 }
 
+# Every answer the page can queue must have a held task to resolve, or the
+# keyed-answer intake would skip it, so build refuses before serving.
+require_held() {  # <notes.json>
+  local key
+  validate_notes "$1" 2>/dev/null || fail "notes file does not satisfy $SCHEMA: $1"
+  while IFS= read -r key; do
+    "$SCRIPT_DIR/fm-captain-hold.sh" open "$key" --distinguish-absent >/dev/null 2>&1 \
+      || fail "$key is not a task held for the captain; hold it (bin/fm-captain-hold.sh hold) before building"
+  done < <(jq -r '.verdict_key, (.decisions // [])[].key' "$1")
+}
+
 command_summary() {
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_notes "$1" || fail "notes file does not satisfy $SCHEMA: $1"
@@ -193,6 +205,8 @@ case "${1-}" in
   render) shift; command_render "$@" ;;
   build)
     shift
+    [ "$#" -eq 4 ] || { usage >&2; exit 2; }
+    require_held "$4"
     out=$(command_render "$@") || exit 1
     printf '%s\n' "$out"
     exec "$SCRIPT_DIR/fm-bearings-board.sh" serve "${out#page: }"
