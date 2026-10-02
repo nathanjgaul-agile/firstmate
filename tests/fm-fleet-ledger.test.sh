@@ -275,7 +275,26 @@ test_flag_off_writes_nothing() {
   pass "flag off: the whole lifecycle leaves no ledger file, offset, or lock"
 }
 
+# Cleanup must accept work landed on a local feature branch, unpushed.
+test_cleanup_accepts_a_feature_branch_landing() {
+  local out
+  make_case feature-landing off
+  out=$(in_home "$ROOT/bin/fm-spawn.sh" "$TASK" "$PROJ_DIR" --mode local-only --yolo off 2>&1) \
+    || fail "spawn failed: $out"
+  printf 'landed\n' > "$WT_DIR/landed.txt"
+  git -C "$WT_DIR" add landed.txt
+  git -C "$WT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm 'landed'
+  out=$(in_home "$ROOT/bin/fm-merge-local.sh" "$TASK" --onto feature/x 2>&1) \
+    || fail "feature landing failed: $out"
+  out=$(in_home "$ROOT/bin/fm-teardown.sh" "$TASK" 2>&1) \
+    || fail "cleanup refused work landed on the feature branch: $out"
+  git -C "$PROJ_DIR" cat-file -e feature/x:landed.txt || fail "the feature branch lost the landed work"
+  pass "cleanup accepts a task whose work landed on a local feature branch"
+}
+
 test_flag_on_records_the_task_lifecycle
+test_cleanup_accepts_a_feature_branch_landing
 test_flag_on_records_a_pr_merge_once
 test_flag_on_records_a_pr_registration
 test_worker_status_line_is_recorded_when_written

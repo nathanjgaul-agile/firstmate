@@ -171,8 +171,12 @@ while :; do
     [ -f "$LOG" ] && [ ! -L "$LOG" ] || die "log changed into an unsafe file: $REL"
     delta_log_key "$LOG"
     if [ -z "$KEY" ] || [ "$KEY" != "$LAST_KEY" ]; then
-      snapshot_log "$LOG" "$TMP/source" "$TMP/size" \
-        || die "log could not be captured safely: $REL"
+      if ! snapshot_log "$LOG" "$TMP/source" "$TMP/size"; then
+        # Removed between the existence check and the capture: the next
+        # sample reports it like any other log that disappeared mid-wait.
+        [ -e "$LOG" ] || [ -L "$LOG" ] || continue
+        die "log could not be captured safely: $REL"
+      fi
       # The gate stat precedes the capture, so the snapshot is at least as new
       # as its key: a log that moved in between changes the key and is
       # captured again on the next poll, never mistaken for stable.

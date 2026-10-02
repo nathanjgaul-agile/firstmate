@@ -9,6 +9,7 @@
 #
 # Usage:
 #   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh serve <page.html>
 #   fm-bearings-board.sh path
 #
 # build      Validate the payload, drop the Captain's Call cards whose subject
@@ -33,6 +34,9 @@
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
+# serve      Run only build's session, bind, and arm steps (same output and
+#            guarantees) on another already-built page, such as the milestone
+#            review page bin/fm-review-page.sh renders.
 # path       Print the stable board path for this home.
 #
 # A LIVE SESSION IS PROVED, NEVER ASSUMED. `lavish-axi <file>` exits 0 even
@@ -358,7 +362,7 @@ await_source_owner() {  # <source-id>
 }
 
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner
+  local data=${1-} board json tmp extracted effective
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
@@ -404,7 +408,14 @@ command_build() {
     fail "cannot publish the board"
   fi
   printf 'board: %s\n' "$board"
+  serve_page "$board"
+}
 
+# Establish, prove, bind, and arm one built page's Lavish session. Shared by
+# build and by other captain-facing pages (bin/fm-review-page.sh) through
+# `serve`, so every page answers through the same keyed-answer intake.
+serve_page() {  # <page.html>
+  local board=$1 sid owner version pre_reopen_owner
   command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
   sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board") \
     || fail "cannot derive the board source id"
@@ -453,6 +464,10 @@ command_build() {
 
 case "${1-}" in
   build) shift; command_build "$@" ;;
+  serve)
+    [ "$#" -eq 2 ] && [ -f "$2" ] && [ ! -L "$2" ] || { usage >&2; exit 2; }
+    serve_page "$2"
+    ;;
   path) board_path ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;

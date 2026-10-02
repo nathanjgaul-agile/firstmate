@@ -22,6 +22,9 @@ A PR in team review is not a merge ask, and `bin/fm-pr-merge.sh` refuses a featu
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 
+A `local-only` ready branch that belongs to a feature lands with `bin/fm-merge-local.sh <id> --onto <feature-branch>` under the same approval; its header owns the merge, refusal, record, and backup-push rules.
+For a milestone review of that feature branch, write the notes file and run `bin/fm-review-page.sh build`; hold its verdict and decision keys for the captain first so the page's answers reach the keyed-answer intake, and use `summary` for the feature PR description.
+
 Tear down a ship task only after landing is confirmed.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
