@@ -292,7 +292,9 @@ rm -f "$SCRATCH/codex-launched"
 OUT=$(env FM_HOME="$HOME_DIR" HERDR_SESSION="$SESSION" FM_SPAWN_NO_GUARD=1 \
   "$ROOT/bin/fm-spawn.sh" hsmoke --relaunch --harness codex) \
   || fail "a stale-registration Herdr pane should be relaunched: $OUT"
-for _ in $(seq 1 20); do
+# Bounded generously: a loaded runner can take seconds to start the pane's
+# command, and the loop ends as soon as the harness marker appears.
+for _ in $(seq 1 100); do
   [ ! -e "$SCRATCH/codex-launched" ] || break
   sleep 0.1
 done
