@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Milestone review</title>
+<style>
+:root {
+  --bg: #f6ecd3; --card: #fffdf7; --ink: #241c14; --body: #3f3224; --muted: #6f5e46;
+  --line: #ddc89c; --add-bg: #e9f2ec; --add: #234e3a; --del-bg: #fbece3; --del: #8f2f17;
+  --hunk: #2f6688; --accent: #2f6b4f; --warn: #a93a1f;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Jost", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a2238; --card: #222c49; --ink: #fbf4e2; --body: #e7d6ae; --muted: #9c8a6c;
+    --line: #2a3656; --add-bg: #1f3a2e; --add: #b9d4c5; --del-bg: #3d2219; --del: #f4d8c9;
+    --hunk: #b6d4e2; --accent: #b9d4c5; --warn: #e08365;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1a2238; --card: #222c49; --ink: #fbf4e2; --body: #e7d6ae; --muted: #9c8a6c;
+  --line: #2a3656; --add-bg: #1f3a2e; --add: #b9d4c5; --del-bg: #3d2219; --del: #f4d8c9;
+  --hunk: #b6d4e2; --accent: #b9d4c5; --warn: #e08365;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--body); font: 16px/1.5 var(--sans); }
+main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+h1, h2, h3 { color: var(--ink); line-height: 1.2; }
+h1 { font-size: 1.8rem; margin: 0 0 4px; }
+h2 { font-size: 1.3rem; margin: 0 0 12px; }
+h3 { font-size: 1rem; margin: 0 0 8px; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 16px; }
+.rv-muted { color: var(--muted); }
+.rv-facts { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 12px 0 0; }
+.rv-facts li { border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; background: var(--card); }
+.rv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+.rv-try li { margin-bottom: 16px; }
+.rv-shots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.rv-shots figure { margin: 0; }
+.rv-shots img { width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.rv-shots figcaption { font-size: 0.85rem; color: var(--muted); }
+.rv-key { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+.rv-key:first-child { border-top: 0; }
+.rv-file { font-family: var(--mono); font-size: 0.85rem; word-break: break-all; }
+.rv-diff { font: 0.8rem/1.45 var(--mono); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
+.rv-line { white-space: pre; padding: 0 8px; min-height: 1.45em; }
+.rv-add { background: var(--add-bg); color: var(--add); }
+.rv-del { background: var(--del-bg); color: var(--del); }
+.rv-hunk { color: var(--hunk); }
+.rv-meta-line { color: var(--muted); }
+.rv-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-top: 12px; }
+.rv-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+button { font: inherit; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 6px 14px; cursor: pointer; }
+button.rv-rec { border-color: var(--accent); }
+button.rv-approve { background: var(--accent); border-color: var(--accent); color: var(--card); }
+button.rv-changes { border-color: var(--warn); color: var(--warn); }
+textarea, input[type="text"] { width: 100%; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-top: 8px; }
+.rv-status { margin-top: 8px; color: var(--accent); min-height: 1.5em; }
+.rv-status.rv-error { color: var(--warn); }
+details > summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+@media (max-width: 720px) {
+  .rv-cols, .rv-shots, .rv-key { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="rv-title"></h1>
+    <div id="rv-meta" class="rv-muted"></div>
+    <ul id="rv-facts" class="rv-facts"></ul>
+  </header>
+  <section>
+    <h2>What changed</h2>
+    <ul id="rv-summary"></ul>
+    <div class="rv-cols">
+      <div><h3>Reused</h3><ul id="rv-reuse"></ul></div>
+      <div><h3>New</h3><ul id="rv-new"></ul></div>
+    </div>
+  </section>
+  <section>
+    <h2>Try it</h2>
+    <ol id="rv-try" class="rv-try"></ol>
+  </section>
+  <section>
+    <h2>Key diffs</h2>
+    <p class="rv-muted">Select any diff line to comment on it.</p>
+    <div id="rv-keys"></div>
+  </section>
+  <section>
+    <h2>Risks and decisions</h2>
+    <ul id="rv-risks"></ul>
+    <div id="rv-decisions"></div>
+  </section>
+  <section>
+    <details>
+      <summary id="rv-full-summary">Full diff</summary>
+      <div id="rv-full"></div>
+    </details>
+  </section>
+  <section>
+    <h2>Verdict</h2>
+    <textarea id="rv-note" rows="3" placeholder="Optional note for the verdict"></textarea>
+    <div class="rv-buttons">
+      <button id="rv-approve" class="rv-approve" type="button">Approve</button>
+      <button id="rv-changes" class="rv-changes" type="button">Request changes</button>
+    </div>
+    <div id="rv-verdict-status" class="rv-status" role="status"></div>
+  </section>
+</main>
+<script id="review-data" type="application/json">
+__FM_REVIEW_PAGE_DATA__
+</script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById("review-data").textContent);
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function list(id, items) {
+    var ul = document.getElementById(id);
+    if (!items || !items.length) { ul.appendChild(el("li", "rv-muted", "None.")); return; }
+    items.forEach(function (t) { ul.appendChild(el("li", "", t)); });
+  }
+  function lineClass(line) {
+    if (/^(\+\+\+|---|diff |index |new file|deleted file|similarity|rename )/.test(line)) return "rv-meta-line";
+    if (line.charAt(0) === "+") return "rv-add";
+    if (line.charAt(0) === "-") return "rv-del";
+    if (line.indexOf("@@") === 0) return "rv-hunk";
+    return "";
+  }
+  /* One element per line, so a Lavish annotation lands on exactly that line. */
+  function diffBlock(text) {
+    var box = el("div", "rv-diff");
+    text.replace(/\n$/, "").split("\n").forEach(function (line) {
+      box.appendChild(el("div", "rv-line " + lineClass(line), line || " "));
+    });
+    return box;
+  }
+  function bytes(s) { return new TextEncoder().encode(s).length; }
+  /* The keyed-answer contract bin/fm-procevent-lavish.sh `answers` reads. */
+  function queue(key, selection, note, label, element, status) {
+    status.className = "rv-status";
+    if (bytes(note) > 512) {
+      status.className = "rv-status rv-error";
+      status.textContent = "Note is too long to queue (512 bytes maximum).";
+      return;
+    }
+    if (!(window.lavish && window.lavish.queuePrompt)) {
+      status.className = "rv-status rv-error";
+      status.textContent = "Open this page through Lavish to send answers.";
+      return;
+    }
+    window.lavish.queuePrompt(
+      "Milestone review answer - " + label + (note ? ": " + note : ""),
+      { tag: "choice", text: label, element: element,
+        data: { schema: "fm-bearings-answer.v1", question: key, selection: selection, note: note } }
+    );
+    status.textContent = "Queued: " + label;
+  }
+
+  document.getElementById("rv-title").textContent = data.title;
+  document.getElementById("rv-meta").textContent =
+    data.project + " - " + data.feature + " (" + data.head + ") against " + data.base;
+  var facts = document.getElementById("rv-facts");
+  facts.appendChild(el("li", "", "Diff: " + (data.shortstat || "no changes")));
+  facts.appendChild(el("li", "", "Local CI: " + data.ci));
+
+  list("rv-summary", data.summary);
+  list("rv-reuse", data.reuse);
+  list("rv-new", data["new"]);
+  list("rv-risks", data.risks);
+
+  var tryList = document.getElementById("rv-try");
+  if (!data.try_it || !data.try_it.length) tryList.appendChild(el("li", "rv-muted", "No steps."));
+  (data.try_it || []).forEach(function (t) {
+    var li = el("li");
+    li.appendChild(el("div", "", t.step));
+    if (t.before_src || t.after_src) {
+      var shots = el("div", "rv-shots");
+      [["Before", t.before_src], ["After", t.after_src]].forEach(function (pair) {
+        var fig = el("figure");
+        if (pair[1]) {
+          var img = el("img");
+          img.src = pair[1];
+          img.alt = pair[0] + ": " + t.step;
+          fig.appendChild(img);
+        }
+        fig.appendChild(el("figcaption", "", pair[1] ? pair[0] : pair[0] + ": none"));
+        shots.appendChild(fig);
+      });
+      li.appendChild(shots);
+    }
+    tryList.appendChild(li);
+  });
+
+  var keys = document.getElementById("rv-keys");
+  data.key_diffs.forEach(function (k) {
+    var row = el("div", "rv-key");
+    var side = el("div");
+    side.appendChild(el("h3", "rv-file", k.file));
+    side.appendChild(el("p", "", k.note));
+    row.appendChild(side);
+    row.appendChild(diffBlock(k.diff));
+    keys.appendChild(row);
+  });
+
+  var decisions = document.getElementById("rv-decisions");
+  (data.decisions || []).forEach(function (d) {
+    var card = el("div", "rv-card");
+    card.appendChild(el("h3", "", d.title));
+    if (d.detail) card.appendChild(el("p", "", d.detail));
+    var note = el("input");
+    note.type = "text";
+    note.placeholder = "Optional note";
+    var buttons = el("div", "rv-buttons");
+    var status = el("div", "rv-status");
+    status.setAttribute("role", "status");
+    d.options.forEach(function (o) {
+      var b = el("button", o.value === d.recommend_value ? "rv-rec" : "", o.label + (o.value === d.recommend_value ? " (recommended)" : ""));
+      b.type = "button";
+      if (o.hint) b.title = o.hint;
+      b.addEventListener("click", function () {
+        queue(d.key, o.value, note.value.trim(), d.title + " -> " + o.label, card, status);
+      });
+      buttons.appendChild(b);
+    });
+    card.appendChild(buttons);
+    card.appendChild(note);
+    card.appendChild(status);
+    decisions.appendChild(card);
+  });
+
+  document.getElementById("rv-full-summary").textContent =
+    "Full diff (" + (data.shortstat || "no changes") + ")";
+  document.getElementById("rv-full").appendChild(diffBlock(data.full_diff));
+
+  var verdictNote = document.getElementById("rv-note");
+  var verdictStatus = document.getElementById("rv-verdict-status");
+  [["rv-approve", "approve", "Approve"], ["rv-changes", "changes", "Request changes"]].forEach(function (v) {
+    var b = document.getElementById(v[0]);
+    b.addEventListener("click", function () {
+      queue(data.verdict_key, v[1], verdictNote.value.trim(), data.title + " -> " + v[2], b, verdictStatus);
+    });
+  });
+})();
+</script>
+</body>
+</html>

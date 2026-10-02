@@ -504,7 +504,8 @@ feature_task() {  # <id> <file> <content>
   local wt="$TMP_ROOT/wt-$1"
   git -C "$FPROJ" worktree add -q -b "fm/$1" "$wt" main || fail "could not add worker copy for $1"
   printf '%s\n' "$3" > "$wt/$2"
-  git -C "$wt" add "$2" && git -C "$wt" commit -qm "$1" || fail "could not commit for $1"
+  git -C "$wt" add "$2" || fail "could not stage for $1"
+  git -C "$wt" commit -qm "$1" || fail "could not commit for $1"
   printf 'project=%s\nmode=local-only\nbranch=fm/%s\nworktree=%s\n' "$FPROJ" "$1" "$wt" > "$FHOME/state/$1.meta"
 }
 
@@ -525,8 +526,8 @@ test_local_merge_onto_feature_branch_combines_tasks() {
   out=$(land_onto feat-b feature/x) || fail "diverged landing failed: $out"
   [ "$(git -C "$FPROJ" rev-list --parents -n1 feature/x | wc -w | tr -d ' ')" = 3 ] \
     || fail "diverged task branches should combine with a merge commit"
-  git -C "$FPROJ" cat-file -e feature/x:a.txt && git -C "$FPROJ" cat-file -e feature/x:b.txt \
-    || fail "the feature branch is missing a landed task's file"
+  git -C "$FPROJ" cat-file -e feature/x:a.txt || fail "the feature branch is missing the first task's file"
+  git -C "$FPROJ" cat-file -e feature/x:b.txt || fail "the feature branch is missing the second task's file"
   [ "$(git -C "$FPROJ" rev-parse main)" = "$main" ] || fail "landing onto a feature branch moved main"
   assert_contains "$out" "merged fm/feat-b into local feature/x" "landing did not report the feature branch"
   pass "fm-merge-local --onto: fast-forwards, then merges a diverged task, leaving main alone"
