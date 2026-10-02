@@ -147,12 +147,16 @@ for _ in 1 2 3 4 5 6; do
     run_reader 11 "$PREFIX_SHA" 10 > "$TMP_ROOT/same-second.out" &
   READER_PID=$!
   wait_for_perl 1 || fail 'the same-second reader never took its first capture'
-  perl -MTime::HiRes=time,sleep -e 'sleep(1 - (time - int(time)))'
+  # Start just past the boundary: Linux stamps ctime from a coarse clock that
+  # can lag the wall clock by a tick, so a write right at the boundary may
+  # still be stamped with the previous second.
+  perl -MTime::HiRes=time,sleep -e 'sleep(1.1 - (time - int(time)))'
   printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
   BEFORE_SECOND=$(ctime_second "$DELTA_HOME/$DELTA_LOG_REL")
   wait_for_perl 2 || fail 'the same-second reader never recaptured the identical rewrite'
   printf 'OMEGA\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
   AFTER_SECOND=$(ctime_second "$DELTA_HOME/$DELTA_LOG_REL")
+  CROSSINGS="${CROSSINGS:-}$BEFORE_SECOND->$AFTER_SECOND (captures $(perl_count)) "
   if [ "$BEFORE_SECOND" != "$AFTER_SECOND" ]; then
     kill "$READER_PID" 2>/dev/null || true
     wait "$READER_PID" 2>/dev/null || true
@@ -166,7 +170,7 @@ for _ in 1 2 3 4 5 6; do
   assert_contains "$OUT" 'reason=prefix-changed' 'a same-second same-size rewrite was not detected'
   break
 done
-[ -n "$SAME_SECOND" ] || fail 'no attempt landed the rewrite in the same ctime second'
+[ -n "$SAME_SECOND" ] || fail "no attempt landed the rewrite in the same ctime second: ${CROSSINGS:-}"
 pass 'a same-second same-size rewrite of the same inode breaks continuity'
 
 # A log that disappears mid-wait breaks as missing only for a nonzero cursor.
