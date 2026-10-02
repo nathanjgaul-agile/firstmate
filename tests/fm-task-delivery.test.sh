@@ -489,6 +489,82 @@ EOF
   pass "fm-merge-local: a registry change cannot redirect an in-flight local-only task"
 }
 
+# Feature-branch landing fixture: a project on main plus one worker copy per
+# task, each on its own fm/<id> branch from main with one committed file.
+feature_fixture() {  # <name>; sets FHOME FPROJ
+  FHOME="$TMP_ROOT/$1/home"
+  FPROJ="$TMP_ROOT/$1/proj"
+  mkdir -p "$FHOME/state" "$FHOME/data"
+  fm_git_init_commit "$FPROJ"
+  git -C "$FPROJ" config user.email test@example.com
+  git -C "$FPROJ" config user.name test
+}
+
+feature_task() {  # <id> <file> <content>
+  local wt="$TMP_ROOT/wt-$1"
+  git -C "$FPROJ" worktree add -q -b "fm/$1" "$wt" main || fail "could not add worker copy for $1"
+  printf '%s\n' "$3" > "$wt/$2"
+  git -C "$wt" add "$2" && git -C "$wt" commit -qm "$1" || fail "could not commit for $1"
+  printf 'project=%s\nmode=local-only\nbranch=fm/%s\nworktree=%s\n' "$FPROJ" "$1" "$wt" > "$FHOME/state/$1.meta"
+}
+
+land_onto() {  # <id> <feature>
+  FM_HOME="$FHOME" FM_STATE_OVERRIDE="$FHOME/state" "$MERGE_LOCAL" "$1" --onto "$2" 2>&1
+}
+
+test_local_merge_onto_feature_branch_combines_tasks() {
+  local main out
+  feature_fixture local-merge-feature
+  main=$(git -C "$FPROJ" rev-parse main)
+  feature_task feat-a a.txt alpha
+  feature_task feat-b b.txt beta
+  out=$(land_onto feat-a feature/x) || fail "first landing failed: $out"
+  [ "$(git -C "$FPROJ" rev-parse feature/x)" = "$(git -C "$FPROJ" rev-parse fm/feat-a)" ] \
+    || fail "a missing feature branch should start at main and fast-forward to the first task"
+  assert_contains "$(cat "$FHOME/state/feat-a.meta")" "landed_onto=feature/x" "landing was not recorded"
+  out=$(land_onto feat-b feature/x) || fail "diverged landing failed: $out"
+  [ "$(git -C "$FPROJ" rev-list --parents -n1 feature/x | wc -w | tr -d ' ')" = 3 ] \
+    || fail "diverged task branches should combine with a merge commit"
+  git -C "$FPROJ" cat-file -e feature/x:a.txt && git -C "$FPROJ" cat-file -e feature/x:b.txt \
+    || fail "the feature branch is missing a landed task's file"
+  [ "$(git -C "$FPROJ" rev-parse main)" = "$main" ] || fail "landing onto a feature branch moved main"
+  assert_contains "$out" "merged fm/feat-b into local feature/x" "landing did not report the feature branch"
+  pass "fm-merge-local --onto: fast-forwards, then merges a diverged task, leaving main alone"
+}
+
+test_local_merge_onto_feature_branch_refuses_unsafe_input() {
+  local tip out
+  feature_fixture local-merge-feature-refuse
+  feature_task feat-c same.txt one
+  feature_task feat-d same.txt two
+  feature_task feat-e e.txt echo
+  land_onto feat-c feature/y >/dev/null || fail "setup landing failed"
+  tip=$(git -C "$FPROJ" rev-parse feature/y)
+
+  out=$(land_onto feat-d feature/y) && fail "a conflicting landing should refuse"
+  assert_contains "$out" "conflicts with feature/y" "conflict refusal was not explained"
+  assert_contains "$out" "same.txt" "conflict refusal did not name the conflicting file"
+  [ "$(git -C "$FPROJ" rev-parse feature/y)" = "$tip" ] || fail "a refused conflict moved the feature branch"
+
+  printf 'wip\n' > "$TMP_ROOT/wt-feat-e/wip.txt"
+  out=$(land_onto feat-e feature/y) && fail "a landing with uncommitted work should refuse"
+  assert_contains "$out" "uncommitted work" "unlanded-work refusal was not explained"
+  [ "$(git -C "$FPROJ" rev-parse feature/y)" = "$tip" ] || fail "a refused unlanded landing moved the feature branch"
+  rm "$TMP_ROOT/wt-feat-e/wip.txt"
+
+  git -C "$FPROJ" checkout -q feature/y || fail "could not check out the feature branch"
+  printf 'dirty\n' >> "$FPROJ/README.md"
+  out=$(land_onto feat-e feature/y) && fail "a landing into a dirty checkout should refuse"
+  assert_contains "$out" "dirty working tree" "dirty-checkout refusal was not explained"
+  [ "$(git -C "$FPROJ" rev-parse feature/y)" = "$tip" ] || fail "a refused dirty landing moved the feature branch"
+  git -C "$FPROJ" checkout -q -- README.md
+
+  out=$(land_onto feat-e feature/y) || fail "a clean checked-out landing failed: $out"
+  [ -f "$FPROJ/e.txt" ] || fail "landing onto the checked-out feature branch did not update its working tree"
+  out=$(land_onto feat-e main) && fail "--onto the default branch should refuse"
+  pass "fm-merge-local --onto: refuses conflicts, uncommitted work, and dirty checkouts without moving anything"
+}
+
 # A registered name may contain spaces, and the lookup must match the whole
 # name rather than only its first whitespace-delimited token (issue #1977).
 # The longer "foo bar" row is listed before the "foo" row so a leading-prefix
@@ -1712,6 +1788,8 @@ test_promotion_delivers_the_real_definition_of_done
 test_promotion_persists_the_selected_ship_branch
 test_promotion_branch_command_is_shell_safe
 test_local_merge_uses_the_recorded_ship_branch
+test_local_merge_onto_feature_branch_combines_tasks
+test_local_merge_onto_feature_branch_refuses_unsafe_input
 test_project_mode_matches_whole_multiword_names
 test_project_mode_maps_the_conditional_policy
 test_project_mode_binds_the_forge_orthogonally
