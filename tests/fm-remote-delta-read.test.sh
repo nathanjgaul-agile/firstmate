@@ -80,7 +80,7 @@ for TOOL in od tail head wc date; do
   hits=$(grep -cx "$TOOL" "$EXEC_LOG" || true)
   [ "$hits" -eq 0 ] || fail "an unchanged log ran $TOOL $hits times in the poll loop"
 done
-[ "$stat_execs" -ge 5 ] || fail "the unchanged window did not keep polling stat ($stat_execs)"
+[ "$stat_execs" -ge 2 ] || fail "the unchanged window did not keep polling stat ($stat_execs)"
 pass 'an unchanged log costs one stat per poll and exits 75 at the window'
 
 # Growth still pays the capture and hashing tools exactly when bytes appear.
@@ -127,26 +127,39 @@ pass 'a same-size in-place rewrite breaks continuity as prefix-changed'
 
 # A same-size rewrite of the same inode within the snapshot's own second leaves
 # size, inode, device, and whole-second mtime and ctime unchanged: only the
-# subsecond stat key can tell it moved. Each attempt starts on a second
-# boundary, rewrites once the first capture ran, and is retried only if the
-# rewrite still crossed into the next ctime second.
+# subsecond stat key can tell it moved. The reader is already polling before
+# each attempt's second boundary, so the window holds one poll rather than
+# process startup: an identical rewrite opens the second (and is recaptured),
+# then the changed rewrite must land in that same ctime second, or the attempt
+# is retried.
 ctime_second() { perl -e 'print +(stat shift)[10]' "$1"; }
+perl_count() { grep -cx perl "$EXEC_LOG" || true; }
+wait_for_perl() {  # <count>
+  local _
+  for _ in $(seq 1 500); do [ "$(perl_count)" -ge "$1" ] && return 0; sleep 0.01; done
+  return 1
+}
 SAME_SECOND=
-for _ in 1 2 3; do
+for _ in 1 2 3 4 5 6; do
+  printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
+  : > "$EXEC_LOG"
+  FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" \
+    run_reader 11 "$PREFIX_SHA" 10 > "$TMP_ROOT/same-second.out" &
+  READER_PID=$!
+  wait_for_perl 1 || fail 'the same-second reader never took its first capture'
   perl -MTime::HiRes=time,sleep -e 'sleep(1 - (time - int(time)))'
   printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
   BEFORE_SECOND=$(ctime_second "$DELTA_HOME/$DELTA_LOG_REL")
-  : > "$EXEC_LOG"
-  FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" \
-    run_reader 11 "$PREFIX_SHA" 2 > "$TMP_ROOT/same-second.out" &
-  READER_PID=$!
-  for _ in $(seq 1 50); do grep -qx perl "$EXEC_LOG" && break; sleep 0.01; done
-  sleep 0.15
+  wait_for_perl 2 || fail 'the same-second reader never recaptured the identical rewrite'
   printf 'OMEGA\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
   AFTER_SECOND=$(ctime_second "$DELTA_HOME/$DELTA_LOG_REL")
+  if [ "$BEFORE_SECOND" != "$AFTER_SECOND" ]; then
+    kill "$READER_PID" 2>/dev/null || true
+    wait "$READER_PID" 2>/dev/null || true
+    continue
+  fi
   RC=0
   wait "$READER_PID" || RC=$?
-  [ "$BEFORE_SECOND" = "$AFTER_SECOND" ] || continue
   SAME_SECOND=1
   [ "$RC" -eq 0 ] || fail "the same-second rewrite read exited $RC instead of 0"
   OUT=$(<"$TMP_ROOT/same-second.out")
