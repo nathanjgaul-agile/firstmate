@@ -1659,14 +1659,23 @@ for (const { name, actual } of rows) {
     throw new Error(`${name} was not hidden before export rendering`);
   }
 }
-async function assertStockHtmlRendering(command, submitData) {
-  editorText = command;
-  terminalInputHandler(submitData);
-  const htmlRenderer = createToolHtmlRenderer({
-    getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+// Pi 1.0.0 resolves export HTML through getToolDefinition. Pi 1.0.1 renamed that
+// dependency to getToolRenderers and ignores the old key, so a fixture that
+// passes only the old key reports every tool as missing. Supply both; each
+// release reads the key it knows and renders the same wrapped definitions.
+function createInstalledToolHtmlRenderer() {
+  const lookup = (name) => tools.find((tool) => tool.name === name);
+  return createToolHtmlRenderer({
+    getToolDefinition: lookup,
+    getToolRenderers: lookup,
     theme,
     cwd: process.cwd(),
   });
+}
+async function assertStockHtmlRendering(command, submitData) {
+  editorText = command;
+  terminalInputHandler(submitData);
+  const htmlRenderer = createInstalledToolHtmlRenderer();
   const exportCases = [
     ...cases.filter(([toolName]) => toolName === "grep" || toolName === "find"),
     ["fm_watch_arm_pi", watchArgs, watchResult],
@@ -1693,11 +1702,7 @@ await assertStockHtmlRendering("/export calm.html", "\r");
 getKeybindings().setUserBindings({ "tui.input.submit": "alt+s" });
 editorText = "/export remapped.html";
 terminalInputHandler("\r");
-const unmatchedRenderer = createToolHtmlRenderer({
-  getToolDefinition: (name) => tools.find((tool) => tool.name === name),
-  theme,
-  cwd: process.cwd(),
-});
+const unmatchedRenderer = createInstalledToolHtmlRenderer();
 if (unmatchedRenderer.renderCall("unmatched-submit", "grep", { pattern: "alpha", path: "." })) {
   throw new Error("ordinary non-submit input activated HTML export rendering");
 }
@@ -2828,13 +2833,17 @@ TS
     return 1
   }
 
-  wait_for_geometry_transition() {
-    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0
+  # Pi's "Reloading..." box is a single intermediate frame, so no polling
+  # interval can be guaranteed to sample it on a loaded machine. Wait instead
+  # for the durable status row Pi appends to the transcript once the reload has
+  # completed and the chat has been rebuilt: it is absent before the reload and
+  # never appears when the reload fails.
+  wait_for_geometry_reload() {
+    local file=$1 reloaded_text=$2 final_text=$3 attempt=0
     while [ "$attempt" -lt 600 ]; do
       capture_geometry_viewport "$file" || true
-      if grep -Fq "$transient_text" "$file" 2>/dev/null; then
-        saw_transient=1
-      elif [ "$saw_transient" -eq 1 ] && grep -Fq "$final_text" "$file" 2>/dev/null; then
+      if grep -Fq "$reloaded_text" "$file" 2>/dev/null &&
+        grep -Fq "$final_text" "$file" 2>/dev/null; then
         return 0
       fi
       sleep 0.01
@@ -2889,9 +2898,9 @@ TS
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/reload'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
-  wait_for_geometry_transition \
+  wait_for_geometry_reload \
     "$snapshot" \
-    "Reloading keybindings, extensions, skills, prompts, themes, and context files..." \
+    "Reloaded keybindings, extensions, skills, prompts, themes, and context files" \
     "CALM_GEOMETRY_FINAL" \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /reload viewport transition"
   assert_geometry_gap "$snapshot" "reloaded native Calm transcript"
