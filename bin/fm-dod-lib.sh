@@ -82,6 +82,9 @@
 # and a `## Captain's intent` line opening with a Captain label or address
 # through the helpers below. Other mentions of `--intent` point here rather than
 # restating the rule.
+# It also owns the PR's public `## Intent` section (fm_pr_intent_block): a short
+# summary of what the PR accomplishes, never the --intent text, which stays
+# complete because the validation reviewer judges the change against it.
 # Every heredoc here stays outside a command substitution: `VAR=$(cat <<EOF ...)`
 # breaks parsing of the whole file on Bash 3.2 (tests/fm-brief.test.sh).
 # fm_brief_worker_role owns the ship/scout role scope. bin/fm-spawn.sh is its one
@@ -328,6 +331,21 @@ Two firstmate-specific rules layer on top of that guidance:
 EOF
 }
 
+# The PR description's `## Intent` section rule, shared by both PR-based ship
+# contracts. no-mistakes publishes --intent verbatim as that section and
+# regenerates the whole body on every PR update, so its worker rewrites the
+# section after the pipeline's last body write instead of shortening --intent.
+fm_pr_intent_block() {  # <mode>
+  cat <<EOF
+The PR description's \`## Intent\` section is a short, human-readable summary of what the PR accomplishes: one line stating the goal, then at most a few bullets.
+Never put task instructions, decisions taken along the way, handover steps, or anyone's verbatim commands in it.
+EOF
+  [ "$1" = no-mistakes ] || return 0
+  cat <<EOF
+no-mistakes publishes your \`--intent\` there verbatim and regenerates the whole PR body on every update, so keep \`--intent\` complete for its reviewer and instead, after the green PR returns, rewrite only that section with \`gh-axi pr edit <number> --body-file <file>\`, leaving every other section unchanged, and read the body back with \`gh-axi pr view <number> --full\` to confirm it.
+EOF
+}
+
 # How a worker on a forge=gerrit project publishes, shared by both publishing
 # modes so the one push, the Change-Id rule, and the ready report are written
 # once. gerrit-axi owns the squash mechanics; this names the one call and what
@@ -412,6 +430,9 @@ The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\` that is ready for review, not a draft.
 Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh-axi pr view <number>\` must print \`draft: no\`, where <number> is the PR number from your PR URL); if it is a draft, mark it ready with \`gh-axi pr ready <number>\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
+EOF
+      fm_pr_intent_block "$mode"
+      cat <<EOF
 Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
 That \`done:\` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
@@ -447,6 +468,9 @@ EOF
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft (\`gh-axi pr view <number>\` must print \`draft: no\`, where <number> is the PR number from your PR URL); if it is a draft, mark it ready with \`gh-axi pr ready <number>\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
+EOF
+      fm_pr_intent_block "$mode"
+      cat <<EOF
 Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. You are finished.
 That CI-ready \`done:\` is accepted only when this copy's HEAD - your latest commit - is one the /no-mistakes run pushed, so commit nothing after the run; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.

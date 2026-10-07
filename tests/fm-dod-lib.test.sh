@@ -382,6 +382,31 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+# A PR's `## Intent` section is a short summary, never the --intent text. Under
+# no-mistakes the pipeline publishes --intent there verbatim, so that worker is
+# told to rewrite the section; direct-PR authors it directly; gerrit has no PR.
+test_pr_based_dod_requires_summary_intent_section() {
+  local mode out
+  for mode in direct-PR no-mistakes; do
+    out="$TMP_ROOT/dod-intent-$mode.md"
+    fm_dod_block "$mode" dod-intent-task > "$out"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'section is a short, human-readable summary of what the PR accomplishes' "$out" \
+      "$mode: DoD must require a short summary Intent section"
+  done
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'rewrite only that section with `gh-axi pr edit <number> --body-file <file>`' "$TMP_ROOT/dod-intent-no-mistakes.md" \
+    "no-mistakes: DoD must rewrite the verbatim Intent section the pipeline publishes"
+  assert_no_grep 'rewrite only that section' "$TMP_ROOT/dod-intent-direct-PR.md" \
+    "direct-PR: the worker writes the body itself, so there is no pipeline section to rewrite"
+  for mode in direct-PR no-mistakes; do
+    out="$TMP_ROOT/dod-intent-$mode-gerrit.md"
+    fm_dod_block "$mode" dod-intent-task "" gerrit > "$out"
+    assert_no_grep 'Intent` section' "$out" "$mode on gerrit: no PR body, so no Intent section rule"
+  done
+  pass "PR-based DoD requires a summary Intent section; no-mistakes rewrites the published one"
+}
+
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
@@ -400,5 +425,6 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_pr_based_dod_requires_summary_intent_section
 
 echo "all fm-dod-lib tests passed"
