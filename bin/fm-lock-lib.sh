@@ -34,7 +34,10 @@ fm_lock_path_mtime() {
 # errored (cannot tell). Diagnostics print on the error path only.
 fm_lock_lsof_holder() {
   local target=$1 output status
-  if output=$(lsof -- "$target" 2>&1); then
+  # -w drops lsof's warnings about filesystems it cannot stat (Docker overlay
+  # and nsfs mounts on Linux). They are not about $target, but any output on
+  # the no-holder path reads as an lsof error, so no lock could be proven stale.
+  if output=$(lsof -w -- "$target" 2>&1); then
     return 0
   else
     status=$?
