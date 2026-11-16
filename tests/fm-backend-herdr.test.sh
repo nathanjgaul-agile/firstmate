@@ -343,11 +343,11 @@ test_version_check_accepts_current_protocol() {
   dir="$TMP_ROOT/version-ok"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"client":{"version":"0.7.1","channel":"stable","protocol":14}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
-  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fm-lab-version \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_version_check' "$ROOT"
   status=$?
   expect_code 0 "$status" "version_check should accept protocol 14 (>= the verified minimum)"
-  assert_contains "$(cat "$log")" $'\x1f''status'$'\x1f''--json' "version_check did not call herdr status --json"
+  assert_contains "$(cat "$log")" $'\x1f''status'$'\x1f''--json'$'\x1f''--session'$'\x1f''fm-lab-version' "version_check did not scope herdr status --json to the selected session"
   pass "fm_backend_herdr_version_check: accepts the current protocol (14)"
 }
 
