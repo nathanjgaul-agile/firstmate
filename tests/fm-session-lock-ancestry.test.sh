@@ -1564,6 +1564,19 @@ test_reanchor_keeps_autoarm_midturn_healthy() {
   pass "session-lock: a re-anchor during a rewake turn keeps the mid-turn auto-arm proof healthy"
 }
 
+# Ubuntu's default umask 0002 must not leave a new state root group-writable:
+# process-event sources refuse a state root another account could write.
+test_new_state_root_is_private_under_a_group_umask() {
+  local dir
+  dir="$TMP_ROOT/umask-state-root"
+  mkdir -p "$dir"
+  (umask 0002; env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID FM_HOME="$dir" "$ROOT/bin/fm-lock.sh" status >/dev/null 2>&1)
+  [ -d "$dir/state" ] || fail "fm-lock.sh did not create the state root"
+  [ -z "$(find "$dir/state" -maxdepth 0 \( -perm -g+w -o -perm -o+w \))" ] \
+    || fail "fm-lock.sh created a group- or other-writable state root under umask 0002"
+  pass "session-lock: a new state root has no group or other write under umask 0002"
+}
+
 test_version_named_session_is_identified_on_both_platforms
 test_harness_at_namespace_pid1_is_examined
 test_ordinary_paths_are_never_harness_processes
@@ -1592,3 +1605,4 @@ test_failed_lock_write_removes_new_sidecar_when_none_existed
 test_verified_reclaim_keeps_new_sidecar
 test_reanchor_keeps_task_leases_live
 test_reanchor_keeps_autoarm_midturn_healthy
+test_new_state_root_is_private_under_a_group_umask
