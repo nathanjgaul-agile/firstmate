@@ -76,7 +76,8 @@
 # 1..25). A configured value rides the generated check shim into watcher runs
 # and is cut down to the watcher's own per-check bound (FM_CHECK_TIMEOUT,
 # default 30, read from the poll's environment because the watcher runs it as
-# a direct child) with a three-second margin. Every read, including one retry,
+# a direct child) with a three-second margin, measured from the poll's start
+# so local preparation counts against that bound. Every read, including one retry,
 # is capped at five seconds. A first attempt killed at that bound or deadline is
 # budget refusal; a killed retry retains the genuine failure that caused it.
 # HTTP 5xx, 429, secondary-rate-limit 403, connection, DNS and TLS failures are
@@ -232,17 +233,25 @@ jq_lib() { # jq options/program via final argument
 }
 
 read_saved() {
-  local file dir task
-  local -a files=() tasks=()
+  local file dir task big oversized
+  local -a files=() tasks=() big_tasks=()
   ERRORS=0
   if [ -L "$DATA" ]; then
     ERRORS=1; printf '[]\n' > "$TMP/saved.json"; return 0
   fi
+  # One find applies the size cap: a size process per record outgrows the check bound.
+  while IFS= read -r -d '' file; do
+    fm_dirname_to dir "$file"
+    fm_basename_to task "$dir"
+    big_tasks+=("$task")
+  done < <(find "$DATA" -mindepth 2 -maxdepth 2 -type f -name contributions.json -size +1048576c -print0)
   for file in "$DATA"/*/contributions.json; do
     [ -e "$file" ] || [ -L "$file" ] || continue
     fm_dirname_to dir "$file"
     fm_basename_to task "$dir"
-    if [ -L "$file" ] || [ -L "$dir" ] || [ ! -f "$file" ] || [ "$(wc -c < "$file")" -gt 1048576 ]; then
+    oversized=0
+    for big in "${big_tasks[@]+"${big_tasks[@]}"}"; do [ "$big" != "$task" ] || oversized=1; done
+    if [ -L "$file" ] || [ -L "$dir" ] || [ ! -f "$file" ] || [ "$oversized" = 1 ]; then
       ERRORS=$((ERRORS + 1))
       continue
     fi
@@ -642,7 +651,8 @@ poll() {
   jq -Rnr --argjson bucket "$((EPOCH / 300))" '
     [inputs] | if length == 0 then . else ($bucket % length) as $offset | .[$offset:] + .[:$offset] end
     | .[]' < "$TMP/live.tsv" > "$TMP/known.tsv"
-  DEADLINE=$(( $(date +%s) + BUDGET ))
+  # Local preparation already spent part of the watcher's bound.
+  DEADLINE=$(( $(date +%s) + (BUDGET < BUDGET_CAP - SECONDS ? BUDGET : BUDGET_CAP - SECONDS) ))
   OBSERVATION_RESERVE=$((BUDGET < 15 ? BUDGET : 15))
   while IFS=$'\t' read -r -a row; do
     [ $((DEADLINE - $(date +%s))) -ge "$OBSERVATION_RESERVE" ] || break
