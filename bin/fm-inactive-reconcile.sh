@@ -22,6 +22,13 @@
 # pre-validation `done: {summary}` still reads done (the pipeline handoff),
 # while a CI-ready or direct-PR/local-only done whose head lives only in the
 # disposable copy reads blocked and is not a terminal inactive outcome.
+# Neither path refreshes remote-tracking refs before that gate: it runs under
+# the child's meta lock inside a scan budget of at most 30 seconds, which a
+# fetch bounded at 30 seconds per remote does not fit. The home's own
+# bin/fm-pr-check.sh, which runs when the child's ready report is registered,
+# and on each watcher sweep when config/pr-register-scan is on, refreshes the
+# child's copy before it refuses, and a later scan publishes the done once that
+# fetch shows its head.
 # A line still being appended (no trailing newline yet)
 # is left for the next poll. This is what keeps a mate's PR-ready, finding,
 # and failure outcomes from depending on the mate model appending them
@@ -67,6 +74,16 @@
 # PR for a status-log state, and never a separately recorded task PR; a scout
 # delivers no PR on either path, so it carries none. Together they
 # prevent one captain-facing record from combining claims from different runs.
+# A live agent withholds that verdict only while it is busy, or while its
+# incarnation postdates the terminal evidence (the spawn epoch in spawn_gen is
+# later than the last status line's [at=] epoch). An idle agent on the same
+# incarnation is a finished worker and keeps its record. The endpoint must read
+# `alive` through fm_backend_agent_state (bin/fm-backend.sh) and then `busy`
+# through fm_busy_classify_meta (bin/fm-busy-lib.sh); an unreadable or unknown
+# answer is never read as proof the agent is gone or idle and leaves the
+# verdict unchanged. Both reads share the scan budget left after the state
+# read (at least one second, like the first visit above), and hitting that
+# bound ends the visit like a state-read timeout.
 # Working, paused, parked, blocked, unknown, persistent secondmates, and
 # captain-held work retain their existing supervision semantics.
 #
@@ -95,7 +112,13 @@
 # main-home acknowledgement. The atomic epoch/cursor marker's mtime gates scans,
 # and its cursor records the last child visited within the aggregate budget.
 #
-# The scan reads only durable local state and fm-crew-state.sh; it never invokes
+# A terminal verdict is withheld while the endpoint carries a live agent that is
+# busy, or whose spawn_gen epoch is later than the last status line's [at=]
+# epoch (a newer incarnation; an unknown epoch counts as not newer).
+#
+# The scan reads only durable local state, fm-crew-state.sh, and one endpoint
+# liveness and busy read per terminal candidate, bounded by the scan budget left
+# after the crew-state read; it never invokes
 # gh, gh-axi, curl, fm-pr-check.sh, fm-pr-poll.sh, or a state *.check.sh.
 set -u
 export LC_ALL=C
@@ -118,6 +141,8 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 
 FM_INACTIVE_RECONCILE_SECS=${FM_INACTIVE_RECONCILE_SECS:-900}
 case "$FM_INACTIVE_RECONCILE_SECS" in
@@ -373,12 +398,7 @@ terminal_outcome_pr() { # <state-line> <kind>
     clean_field "$(state_line_pr "$line")"
     return 0
   fi
-  value=$(state_line_note "$line")
-  case "$value" in 'PR '*) value=${value#PR } ;; *) return 0 ;; esac
-  case "$value" in
-    *' checks green') value=${value% checks green} ;;
-    *' published for review') value=${value% published for review} ;;
-  esac
+  value=$(fm_dod_ready_note_url "$(state_line_note "$line")") || return 0
   fm_pr_url_parse "$value" || return 0
   clean_field "$FM_PR_URL"
 }
@@ -407,21 +427,40 @@ terminal_outcome_corroborated() { # <state> <last-status-line> <state-line>
   [ "$declared" = "$state" ]
 }
 
-# The task's delivered PR. Recorded meta pr= is the only authoritative source;
-# the fallback scrape accepts only a preferred terminal line in a mode's
-# ready-signal shape (`done: PR <url>` or `done: PR <url> checks green`,
-# optionally carrying an emission-time tag this scrape steps over without
-# reading), so a PR a worker merely mentioned in prose is never claimed as the
-# delivery.
+# The task's delivered PR. Recorded meta pr= is authoritative; without one,
+# the fallback scrape accepts only a terminal line in a mode's ready-signal
+# shape (`done: PR <url>` or `done: PR <url> checks green`, optionally carrying
+# an emission-time tag this scrape steps over without reading), so a PR a
+# worker merely mentioned in prose is never claimed as the delivery.
+# With the home's config/pr-register-scan opt-in present, the terminal line
+# instead counts when its note is a ready report accepted by
+# fm_dod_ready_note_url, naming a GitHub-shaped or fm_pr_url_parse forge URL,
+# and it also replaces a recorded PR the status log named
+# (fm_dod_status_names_pr); a recorded PR the log never named stays.
 # A scout never delivers a PR, so it never carries one.
-pr_for_task() { # <meta> [preferred-line]
-  local meta=$1 preferred=${2:-} value
+pr_for_task() { # <meta> <terminal-line> <status-file>
+  local meta=$1 terminal=$2 status=$3 value ready=
+  local github_shape='^https?://[^[:space:])"]+/pull/[0-9]+$'
   [ "$(meta_field "$meta" kind)" != scout ] || return 0
   value=$(meta_field "$meta" pr)
-  if [ -z "$value" ] && [ -n "$preferred" ]; then
-    value=$(printf '%s\n' "$preferred" \
-      | sed -nE 's|^done( \[at=[^]]*\])?: PR (https?://[^[:space:])"]+/pull/[0-9]+)( checks green)?$|\2|p' \
-      | head -1 || true)
+  if [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/pr-register-scan" ]; then
+    if [ -z "$value" ] && [ -n "$terminal" ]; then
+      value=$(printf '%s\n' "$terminal" \
+        | sed -nE 's|^done( \[at=[^]]*\])?: PR (https?://[^[:space:])"]+/pull/[0-9]+)( checks green)?$|\2|p' \
+        | head -1 || true)
+    fi
+    clean_field "$value"
+    return 0
+  fi
+  if [ "$(status_line_verb "$terminal")" = "done" ]; then
+    ready=$(fm_dod_ready_note_url "$(status_line_note "$terminal")") || ready=
+    if [ -n "$ready" ] && ! fm_pr_url_parse "$ready" \
+      && ! [[ "$ready" =~ $github_shape ]]; then
+      ready=
+    fi
+  fi
+  if [ -n "$ready" ] && { [ -z "$value" ] || fm_dod_status_names_pr "$status" "$value"; }; then
+    value=$ready
   fi
   clean_field "$value"
 }
@@ -503,7 +542,7 @@ report_child_ledger_locked() { # <id> <meta>
   status="$STATE/$id.status"
   last=$(child_terminal_ledger_line "$status") || return 0
   state=$(status_line_verb "$last")
-  pr=$(pr_for_task "$meta" "$last")
+  pr=$(pr_for_task "$meta" "$last" "$status")
   incarnation=$(meta_incarnation "$meta")
   fingerprint=$(sha256_text "$incarnation|$id|$state|ledger|$last")
   if [ "$state" = "done" ] && [ ! -f "$(record_path "$fingerprint" reported)" ] \
@@ -581,8 +620,35 @@ report_child() { # <id>
   report_child_ledger_locked "$id" "$meta"
 }
 
+task_holds_live_work() { # <id> <meta> <timeout> <last-status-line>; 0 when the verdict must be withheld, 3 on timeout
+  local id=$1 meta=$2 timeout=$3 last=$4 backend target verdict rc=0 spawn_epoch status_epoch
+  backend=$(fm_backend_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta")
+  [ -n "$target" ] || return 1
+  # shellcheck disable=SC2016
+  verdict=$(fm_run_timed "$timeout" bash -c '
+    . "$1"; . "$2"
+    [ "$(fm_backend_agent_state "$3" "$4" 2>/dev/null)" = alive ] || exit 0
+    printf "alive "
+    fm_busy_classify_meta "$5" "$6" "$7" 2>/dev/null' \
+    _ "$SCRIPT_DIR/fm-backend.sh" "$SCRIPT_DIR/fm-busy-lib.sh" "$backend" "$target" "$meta" "$id" "$STATE") || rc=$?
+  [ "$rc" -ne 124 ] || return 3
+  case "$verdict" in
+    'alive busy'*) return 0 ;;
+    alive*)
+      spawn_epoch=$(meta_field "$meta" spawn_gen)
+      spawn_epoch=${spawn_epoch#s}
+      spawn_epoch=${spawn_epoch%%.*}
+      status_epoch=$(status_line_at_epoch "$last") || return 1
+      case "$spawn_epoch$status_epoch" in ''|*[!0-9]*) return 1 ;; esac
+      [ "$spawn_epoch" -gt "$status_epoch" ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 started left
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
@@ -597,6 +663,7 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   fi
   age=$(last_activity_age "$meta" "$status" "$turn")
   [ "$age" -ge "$FM_INACTIVE_RECONCILE_SECS" ] || return 0
+  started=$(date +%s)
   state_line=$(fm_run_timed "$timeout" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CREW_STATE_NO_FORGE=1 \
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
@@ -610,6 +677,10 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     'state: failed '*) state='failed' ;;
     *) return 0 ;;
   esac
+  left=$((timeout - ($(date +%s) - started)))
+  [ "$left" -ge 1 ] || left=1
+  task_holds_live_work "$id" "$meta" "$left" "$last" && return 0
+  [ "$?" -ne 3 ] || return 3
   terminal_outcome_corroborated "$state" "$last" "$state_line" || return 0
   pr=$(terminal_outcome_pr "$state_line" "$kind")
   incarnation=$(meta_incarnation "$meta")
