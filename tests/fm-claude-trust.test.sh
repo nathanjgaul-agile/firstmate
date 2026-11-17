@@ -658,6 +658,8 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   expect_code 0 $? "the claude spawn must succeed: $out"
   assert_trusted "$config/.claude.json" "$wt" \
     "the claude spawn did not pre-register trust for its worktree"
+  assert_trusted "$config/.claude.json" "$(cd -P "$home" && pwd -P)" \
+    "the claude spawn did not pre-register trust for the home holding its task-channel directories"
   assert_present "$launch_log" "the claude spawn sent no launch command"
   assert_grep 'claude --dangerously-skip-permissions' "$launch_log" \
     "the launch command was not the claude worker launch"
@@ -815,6 +817,30 @@ test_worktree_mode_still_refuses_a_secondmate_home() {
   pass "fm-claude-trust.sh: worktree mode still refuses a secondmate home"
 }
 
+# The primary home is neither a worktree nor a seeded secondmate home: it is the
+# active home whose state/ and data/ hold a worker's task-channel --add-dir
+# directories, which Claude gates behind their own trust dialog.
+test_primary_home_is_trusted_and_unseeded_paths_are_refused() {
+  local case_dir config home out
+  case_dir="$TMP_ROOT/primary-home"
+  config="$case_dir/claude-config"
+  home="$case_dir/fm-home"
+  mkdir -p "$config" "$home/data" "$home/state" "$case_dir/plain"
+  out=$(CLAUDE_CONFIG_DIR="$config" HOME="$case_dir/userhome" "$TRUST" --primary-home "$home" 2>&1)
+  expect_code 0 $? "a home with data/ and state/ must be trusted: $out"
+  assert_trusted "$config/.claude.json" "$(cd -P "$home" && pwd -P)" "the primary home was not trusted"
+  out=$(CLAUDE_CONFIG_DIR="$config" HOME="$case_dir/userhome" "$TRUST" --primary-home "$case_dir/plain" 2>&1)
+  expect_code 1 $? "a directory without data/ and state/ must be refused: $out"
+  assert_not_trusted "$config/.claude.json" "$(cd -P "$case_dir/plain" && pwd -P)" "a plain directory was trusted as a primary home"
+  mkdir -p "$case_dir/outside/data" "$case_dir/escape/state"
+  ln -s "$case_dir/outside/data" "$case_dir/escape/data"
+  out=$(CLAUDE_CONFIG_DIR="$config" HOME="$case_dir/userhome" "$TRUST" --primary-home "$case_dir/escape" 2>&1)
+  expect_code 1 $? "a home whose data/ escapes it must be refused: $out"
+  out=$(CLAUDE_CONFIG_DIR="$config" HOME="$home" "$TRUST" --primary-home "$home" 2>&1)
+  expect_code 1 $? "the user's HOME must never be registered: $out"
+  pass "fm-claude-trust.sh: primary-home mode trusts only a structurally valid home"
+}
+
 # The fail-closed half for secondmates: when the home's trust genuinely cannot be
 # recorded, the spawn must refuse rather than launch a pane that would wedge on
 # the dialog. This is the guard that never fired while the step was skipped.
@@ -869,3 +895,4 @@ test_secondmate_leased_worktree_home_is_trusted
 test_secondmate_home_trust_refuses_everything_unseeded
 test_worktree_mode_still_refuses_a_secondmate_home
 test_secondmate_spawn_fails_closed_when_home_trust_cannot_be_recorded
+test_primary_home_is_trusted_and_unseeded_paths_are_refused

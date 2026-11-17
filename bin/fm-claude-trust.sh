@@ -11,12 +11,15 @@
 # Usage: fm-claude-trust.sh <worktree> <project>
 #        fm-claude-trust.sh --secondmate-home <home> <id>
 #        fm-claude-trust.sh --lab-home <home>
+#        fm-claude-trust.sh --primary-home <home>
 #   <worktree>  the isolated task worktree this spawn launches into
 #   <project>   the primary checkout that worktree belongs to
 #   <home>      the seeded secondmate home this spawn launches into
 #   <id>        the secondmate id that home must already be marked for
 #   --lab-home  the disposable lab home bin/fm-live-lab.sh launches a lab
 #               primary in
+#   --primary-home  the active firstmate home a ship or scout worker's
+#               task-channel directories live in (state/, data/)
 # Prints one line naming what it registered; refuses loudly on anything else.
 #
 # WHY THIS EXISTS. Claude Code gates a folder it has never seen behind an
@@ -158,6 +161,18 @@
 # trust-only for the same reason as a secondmate home, and bin/fm-live-lab.sh
 # removes the entry again when it tears the lab down.
 #
+# PRIMARY-HOME MODE. A ship or scout worker is launched with --add-dir grants
+# for directories under the active firstmate home (state/operational-inbox,
+# state/<id>.inbox, data/<id>; bin/fm-spawn.sh claude_add_dirs_flag). Claude
+# Code gates each such directory behind its own "Adding a new directory" trust
+# dialog the first time, with the cursor on "No, exit" and no way to answer it
+# from firstmate's steering plane, so a fresh machine wedged every worker on it.
+# The home is not a git checkout and carries no marker, so the evidence is
+# structural: its data and state directories must exist and resolve inside the
+# home, and nothing here is judged by a caller's word about what a path is. It
+# is trust-only, like the other home modes, and covers everything below the
+# home by Claude Code's ancestor walk.
+#
 # Only the launching user's own store is written. In worktree mode: the
 # projects entries for the worktree path and the resolved canonical project
 # path in ${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json, which must be a regular
@@ -189,6 +204,7 @@ usage() {
   echo "usage: fm-claude-trust.sh <worktree> <project>" >&2
   echo "       fm-claude-trust.sh --secondmate-home <home> <id>" >&2
   echo "       fm-claude-trust.sh --lab-home <home>" >&2
+  echo "       fm-claude-trust.sh --primary-home <home>" >&2
   exit 2
 }
 
@@ -211,6 +227,14 @@ case "${1:-}" in
     SUB_ID=
     PROJ_ARG=
     SCOPE_NOUN="lab home"
+    ;;
+  --primary-home)
+    [ "$#" -eq 2 ] || usage
+    MODE=primary-home
+    TARGET_ARG=$2
+    SUB_ID=
+    PROJ_ARG=
+    SCOPE_NOUN="firstmate home"
     ;;
   '' | -h | --help)
     usage
@@ -345,6 +369,17 @@ elif [ "$MODE" = lab-home ]; then
   LAB_COMMON=$(common_dir_of "$TARGET_REAL") || true
   [ -n "$LAB_GIT_DIR" ] && [ "$LAB_GIT_DIR" = "$LAB_COMMON" ] \
     || refuse "'$TARGET_REAL' is a linked worktree, not the primary checkout a lab primary launches in"
+elif [ "$MODE" = primary-home ]; then
+  for home_dir_name in data state; do
+    home_dir="$TARGET_REAL/$home_dir_name"
+    [ -d "$home_dir" ] || refuse "'$home_dir' is not a directory, so '$TARGET_REAL' is not a firstmate home"
+    home_dir_real=$(real_dir "$home_dir") || true
+    case "${home_dir_real:-}" in
+      "$TARGET_REAL"/*) ;;
+      *) refuse "'$home_dir' resolves to '${home_dir_real:-unresolvable}', outside the home, so '$TARGET_REAL' is not a safe firstmate home" ;;
+    esac
+  done
+  [ -O "$TARGET_REAL" ] || refuse "'$TARGET_REAL' is not owned by this user"
 else
   # The seed evidence, in the order that names the most useful reason first: the
   # marker decides whether this is a secondmate home at all, the id decides
