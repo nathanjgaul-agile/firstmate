@@ -173,6 +173,16 @@ exit 1
 SH
   chmod +x "$1/lsof"
 }
+# lsof shim: no holder, but like lsof on a Docker host it warns about mounts it
+# cannot stat unless run with -w.
+lsof_no_holder_with_mount_warnings() {
+  cat > "$1/lsof" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = -w ] || echo "lsof: WARNING: can't stat() nsfs file system /run/docker/netns/x" >&2
+exit 1
+SH
+  chmod +x "$1/lsof"
+}
 lsof_live_holder() {
   cat > "$1/lsof" <<'SH'
 #!/usr/bin/env bash
@@ -562,6 +572,28 @@ test_orphaned_stale_packed_refs_lock_recovers() {
   pass "orphaned provably-stale packed-refs.lock is cleared and the clone syncs"
 }
 
+test_stale_lock_recovers_despite_lsof_mount_warnings() {
+  local home fakebin clone out err
+  home=$(new_home)
+  fakebin="$home/fb-lockwarn"; rm -rf "$fakebin"; mkdir -p "$fakebin"
+  clone=$(build_packed_prunable "$home" lockwarn)
+  plant_packed_refs_lock "$clone"
+  lsof_no_holder_with_mount_warnings "$fakebin"
+  out="$home/out-lockwarn"; err="$home/err-lockwarn"
+
+  set +e
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES=2 \
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=0 \
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS=0 \
+    run_sync_guarded "$home" "$fakebin" "$out" "$err" lockwarn
+  set -e
+
+  assert_grep "removed provably-stale packed-refs lock" "$err" \
+    "lsof warnings: guard did not remove the provably-stale lock"
+  assert_absent "$clone/.git/packed-refs.lock" "lsof warnings: lock should be gone after removal"
+  pass "lsof mount warnings do not stop a provably-stale packed-refs.lock from being cleared"
+}
+
 test_live_packed_refs_lock_is_never_removed() {
   local home fakebin clone out err before
   home=$(new_home)
@@ -766,6 +798,7 @@ test_single_project_unresolvable_name_still_skips
 test_whole_fleet_form
 test_bootstrap_relays_recovered_and_stuck
 test_orphaned_stale_packed_refs_lock_recovers
+test_stale_lock_recovers_despite_lsof_mount_warnings
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
 test_transient_packed_refs_lock_self_clears
