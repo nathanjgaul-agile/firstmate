@@ -42,7 +42,14 @@ SH
   cat > "$fake/tmux" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
-  display-message) printf '%%1\n' ;;
+  list-windows) [ -z "${FM_FAKE_PANE_CMD:-}" ] || printf 'fm-%s\n' "${FM_FAKE_TASK_ID:?}" ;;
+  display-message)
+    case "$*" in
+      *pane_tty*) ;;
+      *pane_current_command*) printf '%s\n' "${FM_FAKE_PANE_CMD:-zsh}" ;;
+      *) printf '%%1\n' ;;
+    esac
+    ;;
   capture-pane) printf 'idle\n> \n' ;;
 esac
 SH
@@ -173,6 +180,62 @@ test_main_direct_terminal_presentation_receipt() {
   FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" "$DRAIN" --ack-through "$seq" --recovery-generation "$generation"
   [ "$(outcome_count "$MAIN" presented)" = 1 ] || fail "acknowledged presentation did not receive its own receipt"
   pass "main direct terminal presentation has a durable receipt"
+}
+
+arm_claude_busy() { # <home> <id> <busy|idle>
+  local home=$1 id=$2 state=$3
+  sed 's/^harness=.*/harness=claude/' "$home/state/$id.meta" > "$home/state/$id.meta.new"
+  mv "$home/state/$id.meta.new" "$home/state/$id.meta"
+  printf 'g1\n' > "$home/state/$id.busy-gen"
+  printf 'v1 gen=g1 seq=1 state=%s source=claude-hook event=test ts=%s\n' "$state" "$(date +%s)" > "$home/state/$id.busy-state"
+}
+
+run_live_child() { # <world> <busy|idle> <spawn-epoch-offset> [rewrite-meta]
+  local status_epoch=$(( $(date +%s) - 600 ))
+  make_world "$1"
+  write_child "$MAIN" child "done[at=$status_epoch]: PR https://example.test/owner/repo/pull/1 checks green" "s$((status_epoch + $3)).1.1"
+  arm_claude_busy "$MAIN" child "$2"
+  age "$MAIN/state/child.meta" "$MAIN/state/child.status"
+  [ -z "${4:-}" ] || set_mtime "$(( $(date +%s) - 90 ))" "$MAIN/state/child.meta"
+  FM_FAKE_CREW_STATE='done' FM_FAKE_PANE_CMD=claude FM_FAKE_TASK_ID=child run_reconcile "$MAIN" --startup
+}
+
+assert_withheld() {
+  [ "$(outcome_count "$MAIN" pending)" = 0 ] || fail "$1: terminal outcome record written"
+  ! grep -q inactive-outcome: "$MAIN/state/.wake-queue" 2>/dev/null || fail "$1: supervisor woke"
+}
+
+test_busy_agent_withholds_terminal_outcome() {
+  run_live_child busy-agent busy -10
+  assert_withheld "busy agent"
+  pass "busy agent withholds the terminal outcome"
+}
+
+test_relaunched_idle_agent_withholds_terminal_outcome() {
+  run_live_child relaunched-agent idle 10
+  assert_withheld "relaunched agent"
+  pass "idle agent on a newer incarnation withholds the terminal outcome"
+}
+
+test_idle_finished_agent_keeps_terminal_outcome() {
+  run_live_child idle-agent idle -10
+  [ "$(outcome_count "$MAIN" pending)" = 1 ] || fail "idle finished agent lost its terminal outcome"
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] || fail "idle finished agent did not wake the supervisor"
+  pass "idle finished agent keeps the terminal outcome"
+}
+
+test_idle_agent_with_rewritten_meta_keeps_terminal_outcome() {
+  run_live_child rewritten-meta idle -10 rewrite
+  [ "$(outcome_count "$MAIN" pending)" = 1 ] || fail "rewritten meta withheld the terminal outcome"
+  pass "idle finished agent with rewritten meta keeps the terminal outcome"
+}
+
+test_dead_agent_keeps_terminal_outcome() {
+  make_world dead-agent; write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
+  FM_FAKE_CREW_STATE='done' FM_FAKE_PANE_CMD=zsh FM_FAKE_TASK_ID=child run_reconcile "$MAIN" --startup
+  [ "$(outcome_count "$MAIN" pending)" = 1 ] || fail "dead agent lost its terminal outcome"
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] || fail "dead agent did not wake the supervisor"
+  pass "dead agent keeps the terminal outcome"
 }
 
 # Away-posture regression: a branch-actor drain that consumes an
@@ -464,6 +527,65 @@ test_secondmate_ledger_delivery_carries_report_and_failure() {
   [ "$(grep -c 'child-outcome-boom-' "$MAIN/state/mate.status")" = 2 ] \
     || fail "recovery delivered the wrong number of lines: $(cat "$MAIN/state/mate.status")"
   pass "ledger delivery carries the report pointer, the failed verb, and each new terminal line"
+}
+
+# Children whose ready lines differ only in what config/pr-register-scan opts
+# into: a ready line after one naming the recorded PR, a ready line beside a
+# recorded PR the log never named, a GitLab ready line after one naming the
+# recorded PR, and a GitLab ready line with no PR recorded.
+write_replacement_children() {
+  write_child "$MATE" replaced $'done: PR https://example.test/owner/repo/pull/1 checks green\nworking: reopening\ndone: PR https://example.test/owner/repo/pull/22 checks green'
+  write_child "$MATE" kept 'done: PR https://example.test/owner/repo/pull/23 checks green'
+  write_child "$MATE" gitlab $'done: PR https://example.test/owner/repo/pull/1 checks green\ndone: PR https://gitlab.example/group/sub/project/-/merge_requests/8 checks green'
+  write_child "$MATE" unrecorded 'done: PR https://gitlab.example/group/sub/project/-/merge_requests/9 checks green'
+  awk '$0 !~ /^pr=/' "$MATE/state/unrecorded.meta" > "$MATE/state/unrecorded.meta.tmp"
+  mv "$MATE/state/unrecorded.meta.tmp" "$MATE/state/unrecorded.meta"
+}
+
+# The parent-channel line delivered for <child>, without its emission stamp.
+assert_child_report() { # <child> <expected line after the key> <failure>
+  local key
+  key=$(reported_outcome_key "$MATE" "$1" 'done') || fail "$1 receipt key missing"
+  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" | grep -Fxq "done [key=$key]: $2" \
+    || fail "$3: $(cat "$MAIN/state/mate.status")"
+}
+
+# With config/pr-register-scan, the child's report names the PR its newest
+# ready line delivered once the log shows that line replacing the recorded PR,
+# including a GitLab ready line; a recorded PR the log never named is the
+# supervisor's own choice and stays.
+test_ledger_report_names_a_replacement_pr() {
+  make_world ledger-replacement; bind_secondmate local
+  : > "$MATE/config/pr-register-scan"
+  write_replacement_children
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  assert_child_report replaced "child replaced done: PR https://example.test/owner/repo/pull/22 checks green pr=https://example.test/owner/repo/pull/22 mode=no-mistakes yolo=off" \
+    "the report kept the replaced PR"
+  assert_child_report kept "child kept done: PR https://example.test/owner/repo/pull/23 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
+    "the report overrode a PR the log never named"
+  assert_child_report gitlab "child gitlab done: PR https://gitlab.example/group/sub/project/-/merge_requests/8 checks green pr=https://gitlab.example/group/sub/project/-/merge_requests/8 mode=no-mistakes yolo=off" \
+    "the report kept the recorded PR instead of the GitLab replacement"
+  assert_child_report unrecorded "child unrecorded done: PR https://gitlab.example/group/sub/project/-/merge_requests/9 checks green pr=https://gitlab.example/group/sub/project/-/merge_requests/9 mode=no-mistakes yolo=off" \
+    "the report dropped an unrecorded GitLab ready PR"
+  pass "with the scan opt-in, a child report names a replacement or forge PR and keeps a recorded PR the log never named"
+}
+
+# Without config/pr-register-scan, the same children report exactly what main
+# reports: a recorded PR always stands, and only a GitHub-shaped ready line
+# fills in a missing one.
+test_ledger_report_without_scan_opt_in_keeps_recorded_pr() {
+  make_world ledger-no-replacement; bind_secondmate local
+  write_replacement_children
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  assert_child_report replaced "child replaced done: PR https://example.test/owner/repo/pull/22 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
+    "a newer ready line replaced the recorded PR without the opt-in"
+  assert_child_report kept "child kept done: PR https://example.test/owner/repo/pull/23 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
+    "the report overrode the recorded PR without the opt-in"
+  assert_child_report gitlab "child gitlab done: PR https://gitlab.example/group/sub/project/-/merge_requests/8 checks green pr=https://example.test/owner/repo/pull/1 mode=no-mistakes yolo=off" \
+    "a GitLab ready line replaced the recorded PR without the opt-in"
+  assert_child_report unrecorded "child unrecorded done: PR https://gitlab.example/group/sub/project/-/merge_requests/9 checks green mode=no-mistakes yolo=off" \
+    "a GitLab ready line carried a PR without the opt-in"
+  pass "without the scan opt-in, a child report keeps the recorded PR and accepts only a GitHub-shaped ready line"
 }
 
 # A PR URL a worker only ever mentioned in prose is never claimed as the
@@ -975,6 +1097,40 @@ SH
   pass "stalled state reads are bounded without starving later children"
 }
 
+test_stalled_liveness_read_is_bounded_and_scan_progresses() {
+  local started elapsed
+  make_world bounded-liveness
+  write_child "$MAIN" a 'working: liveness read will stall'
+  age "$MAIN/state/a.meta" "$MAIN/state/a.status"
+  cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = a ]; then
+  sleep 1
+  printf 'state: failed · source: fake\n'
+else
+  printf 'state: done · source: fake\n'
+fi
+SH
+  cat > "$WORLD/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+[ ! -e "$(dirname "$0")/stall" ] || sleep 30
+SH
+  : > "$WORLD/fakebin/stall"
+  chmod +x "$WORLD/fakebin/fm-crew-state.sh" "$WORLD/fakebin/tmux"
+
+  started=$(date +%s)
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=2 run_reconcile "$MAIN" --startup
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -le 4 ] || fail "stalled liveness read exceeded aggregate scan budget (${elapsed}s)"
+
+  rm -f "$WORLD/fakebin/stall"
+  write_child "$MAIN" b 'done: green'
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=2 run_reconcile "$MAIN" --startup
+  grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
+    || fail "next bounded scan did not resume with the following child"
+  pass "stalled liveness reads are bounded without starving later children"
+}
+
 test_full_scan_budget_includes_wake_lock_wait() {
   local holder started elapsed i
   make_world wake-lock; write_child "$MAIN" child 'done: green'
@@ -1322,6 +1478,11 @@ SH
 }
 
 test_main_direct_terminal_presentation_receipt
+test_busy_agent_withholds_terminal_outcome
+test_relaunched_idle_agent_withholds_terminal_outcome
+test_idle_finished_agent_keeps_terminal_outcome
+test_idle_agent_with_rewritten_meta_keeps_terminal_outcome
+test_dead_agent_keeps_terminal_outcome
 test_branch_ack_retires_inactive_outcome_receipt
 test_unpushed_ci_ready_done_is_not_published
 test_local_done_head_is_pinned_before_parent_delivery
@@ -1354,6 +1515,7 @@ test_nonterminal_and_captain_held_states_do_not_report
 test_watcher_hook_and_idle_secondmate_exemption
 test_watcher_poll_delivers_child_ledger_line_to_parent
 test_stalled_state_read_is_bounded_and_scan_progresses
+test_stalled_liveness_read_is_bounded_and_scan_progresses
 test_full_scan_budget_includes_wake_lock_wait
 test_notice_recovery_does_not_duplicate_wake
 test_missing_parent_binding_names_itself
@@ -1361,6 +1523,8 @@ test_reconciliation_never_calls_forge
 test_reconciliation_sets_no_forge_mode_for_state_read
 test_terminal_outcome_never_names_a_pr_the_run_did_not_open
 test_terminal_outcome_takes_the_pr_its_run_opened
+test_ledger_report_names_a_replacement_pr
+test_ledger_report_without_scan_opt_in_keeps_recorded_pr
 test_status_log_sourced_outcome_keeps_its_own_pr
 test_status_log_outcome_keeps_gitlab_and_gerrit_reviews
 test_status_log_outcome_never_borrows_an_earlier_pr
